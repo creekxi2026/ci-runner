@@ -13,7 +13,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -30,13 +29,16 @@ var engine = &http.Client{Transport: &http.Transport{DialContext: func(ctx conte
 }}, Timeout: 120 * time.Second}
 
 func docker(method, path string, body any, out any) error {
+	return dockerContext(context.Background(), method, path, body, out)
+}
+func dockerContext(ctx context.Context, method, path string, body any, out any) error {
 	var b bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&b).Encode(body); err != nil {
 			return err
 		}
 	}
-	req, _ := http.NewRequest(method, "http://docker/v1.47"+path, &b)
+	req, _ := http.NewRequestWithContext(ctx, method, "http://docker/v1.47"+path, &b)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := engine.Do(req)
 	if err != nil {
@@ -62,75 +64,106 @@ func docker(method, path string, body any, out any) error {
 
 type obj = map[string]any
 type fleet struct {
-	mu                   sync.Mutex
-	client               *scaleset.Client
-	session              listener.Client
-	set                  int
-	image, netout, owner string
-	jobs                 map[string]string
+	mu                            sync.Mutex
+	client                        runnerAPI
+	session                       listener.Client
+	set                           int
+	image, pgImage, netout, owner string
+	jobs                          map[string]string
+	scaleMu                       sync.Mutex
+	states                        map[string]*jobState
+	messages                      map[int]*messageProgress
+	idle, lifetime                time.Duration
+	stopping                      bool
+	unregister                    bool
 }
 
 func (f *fleet) labels() obj { return obj{"ci-runner.owner": f.owner} }
 func (f *fleet) create(name, image, user string, cmd, env []string, host obj, network string) error {
+	return f.createContext(context.Background(), name, image, user, cmd, env, host, network)
+}
+func (f *fleet) createContext(ctx context.Context, name, image, user string, cmd, env []string, host obj, network string) error {
 	host["NetworkMode"] = network
 	host["LogConfig"] = obj{"Type": "json-file", "Config": obj{"max-size": "5m", "max-file": "2"}}
-	if err := docker("POST", "/containers/create?name="+name, obj{"Image": image, "User": user, "Cmd": cmd, "Env": env, "Labels": f.labels(), "HostConfig": host}, nil); err != nil {
+	if err := dockerContext(ctx, "POST", "/containers/create?name="+name, obj{"Image": image, "User": user, "Cmd": cmd, "Env": env, "Labels": f.resourceLabels(jobName(name)), "HostConfig": host}, nil); err != nil {
 		return err
 	}
-	return docker("POST", "/containers/"+name+"/start", nil, nil)
+	return dockerContext(ctx, "POST", "/containers/"+name+"/start", nil, nil)
 }
 func secure() obj {
 	return obj{"CapDrop": []string{"ALL"}, "SecurityOpt": []string{"no-new-privileges:true"}, "PidsLimit": 512, "Memory": int64(1536 * 1024 * 1024), "NanoCpus": int64(2e9)}
 }
 func (f *fleet) cleanup(name, network string) {
-	failed := false
-	for _, n := range []string{name + "-fw", name, name + "-pg", name + "-proxy"} {
-		if err := docker("DELETE", "/containers/"+n+"?force=true&v=true", nil, nil); err != nil {
-			log.Printf("cleanup retry needed for %s", n)
-			failed = true
-		}
-	}
-	if err := docker("DELETE", "/networks/"+network, nil, nil); err != nil {
-		failed = true
-	}
-	if failed {
-		return
-	}
-	delete(f.jobs, name)
-	log.Printf("removed job %s", name)
+	j := f.state(name)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.cleaning = true
+	f.cleanJob(name, network, j)
 }
-func (f *fleet) address(name, network string) (string, error) {
+func (f *fleet) address(ctx context.Context, name, network string) (string, error) {
 	var v struct {
 		NetworkSettings struct {
 			Networks map[string]struct{ IPAddress string }
 		}
 	}
-	err := docker("GET", "/containers/"+name+"/json", nil, &v)
+	err := dockerContext(ctx, "GET", "/containers/"+name+"/json", nil, &v)
 	return v.NetworkSettings.Networks[network].IPAddress, err
 }
-func (f *fleet) start(ctx context.Context) (err error) {
+func (f *fleet) start(ctx context.Context) error {
+	var consumed bool
+	return f.startTracked(ctx, &consumed)
+}
+func (f *fleet) startTracked(ctx context.Context, consumed *bool) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, life := f.limits()
+	ctx, cancel := context.WithTimeout(ctx, life)
+	defer cancel()
 	name := "ci-job-" + uuid.NewString()[:12]
 	network := name + "-net"
+	f.mu.Lock()
+	if f.stopping || len(f.jobs) >= 3 {
+		f.mu.Unlock()
+		return fmt.Errorf("scheduling stopped or capacity full")
+	}
+	if f.jobs == nil {
+		f.jobs = map[string]string{}
+	}
+	j := &jobState{created: time.Now(), gate: true}
+	j.mu.Lock()
+	if f.states == nil {
+		f.states = map[string]*jobState{}
+	}
+	f.states[name] = j
+	f.jobs[name] = network
+	f.mu.Unlock()
+	defer j.mu.Unlock()
+	j.created = time.Now()
+	j.provisioning = true
+	j.gate = true
+	defer func() { j.provisioning = false }()
+	released := false
 	defer func() {
-		if err != nil {
-			f.cleanup(name, network)
+		if err != nil && !released {
+			j.cleaning = true
+			f.cleanJob(name, network, j)
 		}
 	}()
-	if err = docker("POST", "/networks/create", obj{"Name": network, "Internal": true, "EnableIPv6": true, "Labels": f.labels()}, nil); err != nil {
+	if err = dockerContext(ctx, "POST", "/networks/create", obj{"Name": network, "Internal": true, "EnableIPv6": true, "Labels": f.resourceLabels(name)}, nil); err != nil {
 		return
 	}
-	f.jobs[name] = network
 	hp := secure()
 	hp["ReadonlyRootfs"] = true
 	hp["Memory"] = 128 * 1024 * 1024
 	hp["NanoCpus"] = int64(250000000)
-	if err = f.create(name+"-proxy", f.image, "1001", []string{"python3", "/opt/ci/egress.py"}, nil, hp, network); err != nil {
+	if err = f.createContext(ctx, name+"-proxy", f.image, "1001", []string{"python3", "/opt/ci/egress.py"}, nil, hp, network); err != nil {
 		return
 	}
-	if err = docker("POST", "/networks/"+f.netout+"/connect", obj{"Container": name + "-proxy"}, nil); err != nil {
+	if err = dockerContext(ctx, "POST", "/networks/"+f.netout+"/connect", obj{"Container": name + "-proxy"}, nil); err != nil {
 		return
 	}
-	proxy, err := f.address(name+"-proxy", network)
+	proxy, err := f.address(ctx, name+"-proxy", network)
 	if err != nil {
 		return err
 	}
@@ -139,14 +172,18 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	pg["ReadonlyRootfs"] = true
 	pg["Memory"] = 512 * 1024 * 1024
 	pg["NanoCpus"] = int64(500000000)
-	if err = f.create(name+"-pg", "postgres:17-bookworm", "999", []string{"postgres"}, []string{"POSTGRES_PASSWORD=ci-disposable", "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}, pg, network); err != nil {
+	if err = f.createContext(ctx, name+"-pg", f.postgresImage(), "999", []string{"postgres"}, []string{"POSTGRES_PASSWORD=ci-disposable", "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}, pg, network); err != nil {
 		return
 	}
-	database, err := f.address(name+"-pg", network)
+	database, err := f.address(ctx, name+"-pg", network)
 	if err != nil {
 		return err
 	}
-	jit, err := f.client.GenerateJitRunnerConfig(ctx, &scaleset.RunnerScaleSetJitRunnerSetting{Name: name, WorkFolder: "_work"}, f.set)
+	api, set := f.api()
+	if api == nil {
+		return fmt.Errorf("runner API unavailable")
+	}
+	jit, err := api.GenerateJitRunnerConfig(ctx, &scaleset.RunnerScaleSetJitRunnerSetting{Name: name, WorkFolder: "_work"}, set)
 	if err != nil {
 		return err
 	}
@@ -154,78 +191,112 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1," + database, "NO_PROXY=localhost,127.0.0.1," + database, "DATABASE_URL=postgres://postgres:ci-disposable@" + database + ":5432/ci?sslmode=disable", "CI_DATABASE_HOST=" + database}
 	h := secure()
 	h["Memory"] = 1536 * 1024 * 1024
-	if err = f.create(name, f.image, "1001", []string{"/opt/ci/runner.sh"}, env, h, network); err != nil {
+	h["ReadonlyRootfs"] = true
+	h["Tmpfs"] = obj{"/home/runner": "rw,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700", "/tmp": "rw,size=128m,nr_inodes=32768,mode=1777"}
+	if err = f.createContext(ctx, name, f.image, "1001", []string{"/opt/ci/runner.sh"}, env, h, network); err != nil {
 		return
 	}
 	fw := secure()
 	fw["CapAdd"] = []string{"NET_ADMIN"}
 	fw["ReadonlyRootfs"] = true
-	if err = f.create(name+"-fw", f.image, "0", []string{"/opt/ci/firewall.sh", proxy, database}, nil, fw, "container:"+name); err != nil {
+	if err = f.createContext(ctx, name+"-fw", f.image, "0", []string{"/opt/ci/firewall.sh", proxy, database}, nil, fw, "container:"+name); err != nil {
 		return
 	}
 	var result struct{ StatusCode int }
-	if err = docker("POST", "/containers/"+name+"-fw/wait?condition=not-running", nil, &result); err != nil {
+	if err = dockerContext(ctx, "POST", "/containers/"+name+"-fw/wait?condition=not-running", nil, &result); err != nil {
 		return
 	}
 	if result.StatusCode != 0 {
 		return fmt.Errorf("firewall setup failed")
 	}
-	if err = docker("DELETE", "/containers/"+name+"-fw?force=true", nil, nil); err != nil {
+	if err = dockerContext(ctx, "DELETE", "/containers/"+name+"-fw?force=true", nil, nil); err != nil {
 		return err
 	}
 	var ex struct{ ID string }
-	if err = docker("POST", "/containers/"+name+"/exec", obj{"User": "1001", "Cmd": []string{"touch", "/tmp/ci-network-ready"}}, &ex); err != nil {
+	if err = dockerContext(ctx, "POST", "/containers/"+name+"/exec", obj{"User": "1001", "Cmd": []string{"touch", "/tmp/ci-network-ready"}}, &ex); err != nil {
 		return
 	}
-	if err = docker("POST", "/exec/"+ex.ID+"/start", obj{"Detach": false, "Tty": false}, nil); err != nil {
+	// A lost response may still have released the runner. Preserve it for reap.
+	released = true
+	*consumed = true
+	if err = dockerContext(ctx, "POST", "/exec/"+ex.ID+"/start", obj{"Detach": false, "Tty": false}, nil); err != nil {
 		return
 	}
-	f.jobs[name] = network
-	log.Printf("started job %s capacity=%d", name, len(f.jobs))
+	log.Printf("started job %s", name)
 	return nil
 }
-func (f *fleet) reap() {
-	for name, n := range f.jobs {
-		var v struct{ State struct{ Running bool } }
-		if err := docker("GET", "/containers/"+name+"/json", nil, &v); errors.Is(err, errMissing) || (err == nil && !v.State.Running) {
-			f.cleanup(name, n)
-		}
-	}
-}
 func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.reap()
-	if msg == nil {
+	f.scaleMu.Lock()
+	defer f.scaleMu.Unlock()
+	if msg == nil || msg.MessageID == listener.InitialMessageID {
 		return nil
 	}
-	var ids []int64
-	for _, j := range msg.JobAvailableMessages {
-		// Only manually dispatched jobs can enter this pre-audit deployment.
-		// No PR, pull_request_target, workflow_run or public fork execution.
-		if j.EventName == "workflow_dispatch" {
-			ids = append(ids, j.RunnerRequestID)
-		} else {
-			log.Printf("rejected event %s", j.EventName)
-		}
+	f.mu.Lock()
+	stopped := f.stopping
+	f.mu.Unlock()
+	if stopped || ctx.Err() != nil {
+		return context.Canceled
 	}
-	if len(ids) > 0 {
-		if _, err := f.session.AcquireJobs(ctx, ids); err != nil {
-			return err
-		}
+	if f.messages == nil {
+		f.messages = map[int]*messageProgress{}
 	}
-	for _, j := range msg.JobCompletedMessages {
-		if n, ok := f.jobs[j.RunnerName]; ok {
-			f.cleanup(j.RunnerName, n)
-		}
+	p := f.messages[msg.MessageID]
+	if p == nil {
+		p = &messageProgress{}
+		f.messages[msg.MessageID] = p
 	}
-	if msg.Statistics != nil {
-		for range additions(msg.Statistics.TotalAssignedJobs, len(f.jobs)) {
-			if err := f.start(ctx); err != nil {
+	if p.done {
+		return nil
+	}
+	if !p.acquired {
+		var ids []int64
+		for _, j := range msg.JobAvailableMessages {
+			if j.EventName == "workflow_dispatch" {
+				ids = append(ids, j.RunnerRequestID)
+			}
+		}
+		if len(ids) > 0 {
+			if _, err := f.session.AcquireJobs(ctx, ids); err != nil {
 				return err
 			}
 		}
+		p.acquired = true
 	}
+	for _, event := range msg.JobStartedMessages {
+		if _, ok := f.snapshot()[event.RunnerName]; ok {
+			j := f.state(event.RunnerName)
+			j.mu.Lock()
+			j.busy = true
+			j.mu.Unlock()
+		}
+	}
+	for _, event := range msg.JobCompletedMessages {
+		if n, ok := f.snapshot()[event.RunnerName]; ok {
+			f.cleanup(event.RunnerName, n)
+			if _, pending := f.snapshot()[event.RunnerName]; pending {
+				return fmt.Errorf("completion cleanup pending")
+			}
+		}
+	}
+	if !p.planned {
+		if msg.Statistics != nil {
+			p.remaining = additions(msg.Statistics.TotalAssignedJobs, len(f.snapshot()))
+		}
+		p.planned = true
+	}
+	// Freeze this message's additions. Completed runners must not be replaced
+	// using the same old statistics when a later addition fails and retries.
+	for p.remaining > 0 {
+		var consumed bool
+		err := f.startTracked(ctx, &consumed)
+		if consumed {
+			p.remaining--
+		}
+		if err != nil {
+			return err
+		}
+	}
+	p.done = true
 	return nil
 }
 func main() {
@@ -267,66 +338,56 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	set, err := ensureScaleSet(ctx, c, os.Getenv("SCALE_SET_NAME"))
-	if err != nil {
-		return fmt.Errorf("scale set registration failed: %w", err)
-	}
-	session, err := c.MessageSessionClient(ctx, set.ID, "ci-runner-controller")
+	runnerImage, postgresImage, err := deploymentImages(ctx)
 	if err != nil {
 		return err
 	}
-	defer session.Close(context.Background())
-	f := &fleet{client: c, session: session, set: set.ID, image: os.Getenv("RUNNER_IMAGE"), netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}}
+	f := &fleet{client: c, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}
-	// Recover only resources belonging to this exact deployment after crash.
-	var containers []struct{ Names []string }
-	filter, _ := json.Marshal(obj{"label": []string{"ci-runner.owner=" + f.owner}})
-	if err = docker("GET", "/containers/json?all=true&filters="+url.QueryEscape(string(filter)), nil, &containers); err != nil {
-		return err
-	}
-	for _, v := range containers {
-		for _, n := range v.Names {
-			if err = docker("DELETE", "/containers/"+n[1:]+"?force=true&v=true", nil, nil); err != nil {
-				return err
-			}
-		}
-	}
-	var networks []struct{ ID string }
-	if err = docker("GET", "/networks?filters="+url.QueryEscape(string(filter)), nil, &networks); err != nil {
-		return err
-	}
-	for _, v := range networks {
-		if err = docker("DELETE", "/networks/"+v.ID, nil, nil); err != nil {
-			return err
-		}
-	}
-	defer func() {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		for n, v := range f.jobs {
-			f.cleanup(n, v)
-		}
-	}()
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				f.mu.Lock()
-				f.reap()
-				f.mu.Unlock()
-			}
-		}
-	}()
-	l, err := listener.New(session, listener.Config{ScaleSetID: set.ID, MaxRunners: 3})
+	f.idle, f.lifetime, err = timeoutConfig()
 	if err != nil {
 		return err
 	}
-	log.Printf("listening scale-set=%s id=%d max=3", os.Getenv("SCALE_SET_NAME"), set.ID)
-	return l.Run(ctx, f)
+	// Recovery and the local janitor start before registration/session acquisition.
+	if err = f.recover(); err != nil {
+		return err
+	}
+	localCtx, stopLocal := context.WithCancel(context.Background())
+	defer stopLocal()
+	localDone := make(chan struct{})
+	go func() { defer close(localDone); f.maintain(localCtx, 10*time.Second) }()
+	retry(ctx, time.Second, func() error {
+		set, e := ensureScaleSet(ctx, c, os.Getenv("SCALE_SET_NAME"))
+		if e != nil {
+			return e
+		}
+		f.mu.Lock()
+		f.set = set.ID
+		f.mu.Unlock()
+		session, e := c.MessageSessionClient(ctx, set.ID, "ci-runner-controller")
+		if e != nil {
+			return e
+		}
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = session.Close(closeCtx)
+		}()
+		f.session = session
+		return f.listen(ctx, time.Second)
+	})
+	log.Print("shutdown: scheduling stopped; draining until jobs exit or reach lifetime")
+	drained := f.drain(time.Second)
+	stopLocal()
+	select {
+	case <-localDone:
+	case <-time.After(time.Second):
+		return fmt.Errorf("shutdown: local I/O still pending; labeled resources retained for recovery")
+	}
+	if !drained {
+		return fmt.Errorf("drain deadline reached; remaining resources require recovery")
+	}
+	return nil
 }

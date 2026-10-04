@@ -1,9 +1,10 @@
 name: ${COMPOSE_PROJECT_NAME:-ci-runner}
 services:
   controller:
-    image: ${CONTROLLER_IMAGE:-ghcr.io/creekxi2026/ci-runner:controller}
+    image: ${CONTROLLER_IMAGE:?Set digest-pinned CONTROLLER_IMAGE from a successful deployment artifact}
     platform: linux/arm64
     restart: unless-stopped
+    stop_grace_period: ${RUNNER_MAX_LIFETIME_SECONDS:-3600}s
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -13,7 +14,11 @@ services:
     environment:
       GITHUB_CONFIG_URL: ${GITHUB_CONFIG_URL:?Set repository URL}
       SCALE_SET_NAME: ${SCALE_SET_NAME:-ci-mac-arm64-smoke}
-      RUNNER_IMAGE: ${RUNNER_IMAGE:-ghcr.io/creekxi2026/ci-runner:runner}
+      RUNNER_IMAGE: ${RUNNER_IMAGE:?Set digest-pinned RUNNER_IMAGE from the same deployment artifact}
+      IMAGE_REVISION: ${IMAGE_REVISION:?Set source revision from the deployment artifact}
+      POSTGRES_IMAGE: ${POSTGRES_IMAGE:?Set a digest-pinned PostgreSQL image}
+      RUNNER_IDLE_TIMEOUT_SECONDS: ${RUNNER_IDLE_TIMEOUT_SECONDS:-300}
+      RUNNER_MAX_LIFETIME_SECONDS: ${RUNNER_MAX_LIFETIME_SECONDS:-3600}
       EGRESS_NETWORK: ${COMPOSE_PROJECT_NAME:-ci-runner}_egress
       DEPLOYMENT_ID: ${COMPOSE_PROJECT_NAME:-ci-runner}
     secrets: [github_token]
