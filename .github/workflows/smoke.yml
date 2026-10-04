@@ -1,0 +1,33 @@
+name: Isolated ephemeral smoke
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3, 4]
+    runs-on: ci-mac-arm64-smoke
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Prove tools, public internet and per-job PostgreSQL
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          test ! -e /var/run/docker.sock
+          ! command -v sudo
+          git --version; node --version; npm --version; python3 --version
+          curl -fsS --max-time 30 https://api.github.com/zen
+          for i in $(seq 1 30); do pg_isready -h "$CI_DATABASE_HOST" -U postgres && break; sleep 1; done
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE TABLE isolated (n int); INSERT INTO isolated VALUES (1); SELECT * FROM isolated;'
+          python3 scripts/network_probe.py
+          sleep 45
+      - name: Deliberate failed-job cleanup exercise
+        if: matrix.slot == 4
+        run: exit 17

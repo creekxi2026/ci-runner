@@ -1,0 +1,30 @@
+name: ${COMPOSE_PROJECT_NAME:-ci-runner}
+services:
+  controller:
+    image: ${CONTROLLER_IMAGE:-ghcr.io/creekxi2026/ci-runner:controller}
+    platform: linux/arm64
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    environment:
+      GITHUB_CONFIG_URL: ${GITHUB_CONFIG_URL:?Set repository URL}
+      SCALE_SET_NAME: ${SCALE_SET_NAME:-ci-mac-arm64-smoke}
+      RUNNER_IMAGE: ${RUNNER_IMAGE:-ghcr.io/creekxi2026/ci-runner:runner}
+      EGRESS_NETWORK: ${COMPOSE_PROJECT_NAME:-ci-runner}_egress
+      DEPLOYMENT_ID: ${COMPOSE_PROJECT_NAME:-ci-runner}
+    secrets: [github_token]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [egress]
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: '2'}
+networks:
+  egress: {}
+secrets:
+  github_token:
+    file: ${GITHUB_TOKEN_FILE:-./.secrets/github-token}

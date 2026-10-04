@@ -1,0 +1,8 @@
+.git
+.env
+.env.*
+.secrets
+.operations
+__pycache__
+tests
+*.md

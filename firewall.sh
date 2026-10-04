@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+for cmd in iptables ip6tables; do
+ "$cmd" -F OUTPUT
+ "$cmd" -P OUTPUT DROP
+ "$cmd" -A OUTPUT -o lo -j ACCEPT
+ "$cmd" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+done
+iptables -A OUTPUT -d "$1" -p tcp --dport 3128 -j ACCEPT
+iptables -A OUTPUT -d "$2" -p tcp --dport 5432 -j ACCEPT
+# Job has no CAP_NET_ADMIN; helper exits before runner registration.
