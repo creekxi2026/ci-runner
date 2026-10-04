@@ -69,6 +69,7 @@ type fleet struct {
 	session                       listener.Client
 	set                           int
 	image, pgImage, netout, owner string
+	proxyEnv                      []string
 	jobs                          map[string]string
 	scaleMu                       sync.Mutex
 	states                        map[string]*jobState
@@ -158,7 +159,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	hp["ReadonlyRootfs"] = true
 	hp["Memory"] = 128 * 1024 * 1024
 	hp["NanoCpus"] = int64(250000000)
-	if err = f.createContext(ctx, name+"-proxy", f.image, "1001", []string{"python3", "/opt/ci/egress.py"}, nil, hp, network); err != nil {
+	if err = f.createContext(ctx, name+"-proxy", f.image, "1001", []string{"python3", "/opt/ci/egress.py"}, f.proxyEnv, hp, network); err != nil {
 		return
 	}
 	if err = dockerContext(ctx, "POST", "/networks/"+f.netout+"/connect", obj{"Container": name + "-proxy"}, nil); err != nil {
@@ -340,7 +341,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	f := &fleet{client: c, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	proxyEnv, err := upstreamProxyEnv(os.Getenv("PUBLIC_EGRESS_UPSTREAM_PROXY"))
+	if err != nil {
+		return err
+	}
+	f := &fleet{client: c, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}

@@ -1,5 +1,29 @@
 """Public-only HTTP/CONNECT proxy. Resolve once, validate all, dial pinned IP."""
-import ipaddress, socket, socketserver, select, urllib.parse
+import ipaddress, socket, socketserver, select, urllib.parse, os
+
+def upstream_tunnel(address, value):
+    u = urllib.parse.urlsplit(value)
+    if u.scheme != 'http' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('', '/'):
+        raise ValueError('invalid trusted upstream')
+    s = socket.create_connection((u.hostname, u.port or 80), timeout=15)
+    try:
+        host = '[' + address[0] + ']' if ':' in address[0] else address[0]
+        authority = host + ':' + str(address[1])
+        s.sendall(('CONNECT ' + authority + ' HTTP/1.1\r\nHost: ' + authority + '\r\n\r\n').encode('ascii'))
+        header = b''
+        while not header.endswith(b'\r\n\r\n'):
+            b = s.recv(1)
+            if not b or len(header) >= 32768:
+                raise OSError('invalid upstream response')
+            header += b
+        status = header.split(b'\r\n', 1)[0].split()
+        if len(status) < 2 or status[1] != b'200':
+            raise OSError('upstream refused connection')
+        return s
+    except Exception:
+        s.close()
+        raise
+
 
 def public(value):
     ip = ipaddress.ip_address(value)
@@ -15,7 +39,13 @@ def connect(host, port):
     answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     if not answers or any(not public(a[4][0]) for a in answers):
         raise ValueError('destination denied')
+    upstream = os.environ.get('PUBLIC_EGRESS_UPSTREAM_PROXY', '')
     for family, kind, proto, _, address in answers:
+        if upstream:
+            try:
+                return upstream_tunnel(address, upstream)
+            except OSError:
+                continue
         s = socket.socket(family, kind, proto); s.settimeout(15)
         try:
             s.connect(address); return s
