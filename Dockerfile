@@ -35,7 +35,9 @@ WORKDIR /opt/actions-runner
 RUN curl -fsSL https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-arm64-2.337.0.tar.gz -o /runner.tar.gz \
  && printf '%s  %s\n' 9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393 /runner.tar.gz | sha256sum -c - \
  && tar -xzf /runner.tar.gz && rm /runner.tar.gz && chown -R runner:runner /home/runner /opt/actions-runner
-COPY egress.py firewall.sh runner.sh /opt/ci/
+COPY --from=build /usr/local/go /opt/go
+ENV PATH="/opt/go/bin:${PATH}"
+COPY egress.py firewall.sh runner.sh toolcache-init.sh /opt/ci/
 RUN chmod 755 /opt/ci/*.sh
 WORKDIR /home/runner
 USER runner
