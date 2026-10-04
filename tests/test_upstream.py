@@ -3,6 +3,37 @@ from unittest.mock import patch,MagicMock
 spec=importlib.util.spec_from_file_location('egress_upstream',pathlib.Path(__file__).resolve().parents[1]/'egress.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class Upstream(unittest.TestCase):
+ def test_slow_response_cannot_extend_total_handshake_deadline(self):
+  conn=MagicMock();clock=[0.0];header=iter(b'HTTP/1.1 200 OK\r\n\r\n')
+  def recv(n):
+   clock[0]+=4.0
+   return bytes([next(header)])
+  conn.recv.side_effect=recv
+  with patch('time.monotonic',side_effect=lambda:clock[0]),patch.object(m.socket,'create_connection',return_value=conn):
+   with self.assertRaises(TimeoutError):m.upstream_tunnel(('1.1.1.1',443),'http://trusted-gateway:7897')
+  conn.close.assert_called_once()
+  self.assertLessEqual(clock[0],16.0)
+
+ def test_ipv6_tunnel_preserves_data_after_header(self):
+  client,server=socket.socketpair()
+  with client,server:
+   server.sendall(b'HTTP/1.1 200 OK\r\n\r\nNEXT')
+   with patch.object(m.socket,'create_connection',return_value=client):
+    self.assertIs(m.upstream_tunnel(('2606:4700:4700::1111',443),'http://trusted-gateway:7897'),client)
+   self.assertEqual(client.recv(4),b'NEXT')
+   self.assertEqual(client.gettimeout(),15)
+   self.assertIn(b'CONNECT [2606:4700:4700::1111]:443 HTTP/1.1',server.recv(4096))
+ def test_eof_closes_unfinished_tunnel(self):
+  conn=MagicMock();conn.recv.side_effect=[b'H',b'']
+  with patch.object(m.socket,'create_connection',return_value=conn):
+   with self.assertRaises(OSError):m.upstream_tunnel(('1.1.1.1',443),'http://trusted-gateway:7897')
+  conn.close.assert_called_once()
+ def test_oversized_response_header_is_rejected_and_closed(self):
+  conn=MagicMock();conn.recv.return_value=b'x'
+  with patch.object(m.socket,'create_connection',return_value=conn):
+   with self.assertRaises(OSError):m.upstream_tunnel(('1.1.1.1',443),'http://trusted-gateway:7897')
+  self.assertLessEqual(conn.recv.call_count,32769)
+  conn.close.assert_called_once()
  def test_public_destination_is_numeric_and_never_reresolved(self):
   conn=MagicMock();conn.recv.side_effect=[bytes([x]) for x in b'HTTP/1.1 200 Connection established\r\n\r\n']
   answer=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('1.1.1.1',443))]

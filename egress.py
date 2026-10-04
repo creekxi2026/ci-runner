@@ -1,24 +1,34 @@
 """Public-only HTTP/CONNECT proxy. Resolve once, validate all, dial pinned IP."""
-import ipaddress, socket, socketserver, select, urllib.parse, os
+import ipaddress, socket, socketserver, select, urllib.parse, os, time
 
 def upstream_tunnel(address, value):
     u = urllib.parse.urlsplit(value)
     if u.scheme != 'http' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('', '/'):
         raise ValueError('invalid trusted upstream')
+    deadline = time.monotonic() + 15
     s = socket.create_connection((u.hostname, u.port or 80), timeout=15)
     try:
+        def remaining_timeout():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('upstream handshake deadline exceeded')
+            s.settimeout(remaining)
+        remaining_timeout()
         host = '[' + address[0] + ']' if ':' in address[0] else address[0]
         authority = host + ':' + str(address[1])
         s.sendall(('CONNECT ' + authority + ' HTTP/1.1\r\nHost: ' + authority + '\r\n\r\n').encode('ascii'))
         header = b''
         while not header.endswith(b'\r\n\r\n'):
+            remaining_timeout()
             b = s.recv(1)
             if not b or len(header) >= 32768:
                 raise OSError('invalid upstream response')
             header += b
+        remaining_timeout()
         status = header.split(b'\r\n', 1)[0].split()
         if len(status) < 2 or status[1] != b'200':
             raise OSError('upstream refused connection')
+        s.settimeout(15)
         return s
     except Exception:
         s.close()
