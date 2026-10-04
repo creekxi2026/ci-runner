@@ -10,6 +10,36 @@ import (
 	"testing"
 )
 
+type fakeSets struct {
+	existing *scaleset.RunnerScaleSet
+	creates  int
+}
+
+func (f *fakeSets) GetRunnerScaleSet(context.Context, int, string) (*scaleset.RunnerScaleSet, error) {
+	return f.existing, nil
+}
+func (f *fakeSets) CreateRunnerScaleSet(_ context.Context, s *scaleset.RunnerScaleSet) (*scaleset.RunnerScaleSet, error) {
+	f.creates++
+	return s, nil
+}
+func (f *fakeSets) UpdateRunnerScaleSet(_ context.Context, _ int, s *scaleset.RunnerScaleSet) (*scaleset.RunnerScaleSet, error) {
+	return s, nil
+}
+func TestRestartReusesExistingScaleSet(t *testing.T) {
+	f := &fakeSets{existing: &scaleset.RunnerScaleSet{ID: 42, Name: "same"}}
+	s, err := ensureScaleSet(context.Background(), f, "same")
+	if err != nil || s.ID != 42 || f.creates != 0 {
+		t.Fatal("restart tried duplicate scale-set creation")
+	}
+}
+func TestFirstStartCreatesScaleSetWithUpdatesEnabled(t *testing.T) {
+	f := &fakeSets{}
+	s, err := ensureScaleSet(context.Background(), f, "new")
+	if err != nil || f.creates != 1 || s.RunnerSetting.DisableUpdate {
+		t.Fatal("initial scale-set configuration incorrect")
+	}
+}
+
 func TestCapacity(t *testing.T) {
 	for _, v := range []struct{ want, current, n int }{{9, 0, 3}, {2, 1, 1}, {0, 2, 0}, {3, 3, 0}} {
 		if n := additions(v.want, v.current); n != v.n {

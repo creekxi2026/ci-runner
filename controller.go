@@ -234,6 +234,28 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+type scaleSets interface {
+	GetRunnerScaleSet(context.Context, int, string) (*scaleset.RunnerScaleSet, error)
+	CreateRunnerScaleSet(context.Context, *scaleset.RunnerScaleSet) (*scaleset.RunnerScaleSet, error)
+	UpdateRunnerScaleSet(context.Context, int, *scaleset.RunnerScaleSet) (*scaleset.RunnerScaleSet, error)
+}
+
+func ensureScaleSet(ctx context.Context, c scaleSets, name string) (*scaleset.RunnerScaleSet, error) {
+	existing, err := c.GetRunnerScaleSet(ctx, 1, name)
+	if err != nil {
+		return nil, err
+	}
+	desired := &scaleset.RunnerScaleSet{Name: name, RunnerGroupID: 1, RunnerSetting: scaleset.RunnerSetting{DisableUpdate: false}}
+	if existing == nil {
+		return c.CreateRunnerScaleSet(ctx, desired)
+	}
+	if existing.RunnerSetting.DisableUpdate {
+		return c.UpdateRunnerScaleSet(ctx, existing.ID, desired)
+	}
+	return existing, nil
+}
+
 func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -245,7 +267,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	set, err := c.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{Name: os.Getenv("SCALE_SET_NAME"), RunnerGroupID: 1, RunnerSetting: scaleset.RunnerSetting{DisableUpdate: false}})
+	set, err := ensureScaleSet(ctx, c, os.Getenv("SCALE_SET_NAME"))
 	if err != nil {
 		return fmt.Errorf("scale set registration failed: %w", err)
 	}
