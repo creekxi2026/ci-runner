@@ -26,7 +26,7 @@ def upstream_tunnel(address, value):
             header += b
         remaining_timeout()
         status = header.split(b'\r\n', 1)[0].split()
-        if len(status) < 2 or status[1] != b'200':
+        if len(status) < 2 or status[0] not in (b'HTTP/1.0', b'HTTP/1.1') or status[1] != b'200':
             raise OSError('upstream refused connection')
         s.settimeout(15)
         return s

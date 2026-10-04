@@ -23,6 +23,13 @@ class Upstream(unittest.TestCase):
    self.assertEqual(client.recv(4),b'NEXT')
    self.assertEqual(client.gettimeout(),15)
    self.assertIn(b'CONNECT [2606:4700:4700::1111]:443 HTTP/1.1',server.recv(4096))
+ def test_non_http_success_status_is_rejected_and_closed(self):
+  for line in (b'NOTHTTP 200\r\n\r\n',b'HTTP/2.0 200 OK\r\n\r\n',b'HTTP/1.2 200 OK\r\n\r\n'):
+   with self.subTest(line=line):
+    conn=MagicMock();conn.recv.side_effect=[bytes([x]) for x in line]
+    with patch.object(m.socket,'create_connection',return_value=conn):
+     with self.assertRaises(OSError):m.upstream_tunnel(('1.1.1.1',443),'http://trusted-gateway:7897')
+    conn.close.assert_called_once()
  def test_eof_closes_unfinished_tunnel(self):
   conn=MagicMock();conn.recv.side_effect=[b'H',b'']
   with patch.object(m.socket,'create_connection',return_value=conn):
