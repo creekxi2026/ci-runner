@@ -5,6 +5,8 @@ def public(value):
     ip = ipaddress.ip_address(value)
     if getattr(ip, 'ipv4_mapped', None):
         ip = ip.ipv4_mapped
+    if ip.version == 6 and any(ip in ipaddress.ip_network(n) for n in ('2002::/16','2001::/32','64:ff9b::/96','64:ff9b:1::/48')):
+        return False
     return ip.is_global and not ip.is_multicast and not ip.is_reserved
 
 def connect(host, port):
