@@ -182,7 +182,7 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 					t.Error("runner root filesystem is unbounded writable storage")
 				}
 				tmpfs, _ := v.HostConfig["Tmpfs"].(map[string]any)
-				if !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "size=2g") || !strings.Contains(fmt.Sprint(tmpfs["/tmp"]), "size=128m") {
+				if !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "size=2g") || !strings.Contains(fmt.Sprint(tmpfs["/tmp"]), "size=128m") || !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "rw,exec,") || !strings.Contains(fmt.Sprint(tmpfs["/tmp"]), "rw,exec,") {
 					t.Error("runner workspace/temp storage is not bounded")
 				}
 			}
@@ -454,7 +454,8 @@ func TestPartialMessageRetryDoesNotReplaceAlreadyCompletedCapacity(t *testing.T)
 			w.WriteHeader(200)
 		}
 	})
-	f := &fleet{client: api, set: 42, jobs: map[string]string{}}
+	want := 2
+	f := &fleet{client: api, set: 42, jobs: map[string]string{}, demandSource: func(context.Context) (int, error) { return want, nil }}
 	msg := &scaleset.RunnerScaleSetMessage{MessageID: 99, Statistics: &scaleset.RunnerScaleSetStatistic{TotalAssignedJobs: 2}}
 	if f.Scale(context.Background(), msg) == nil {
 		t.Fatal("expected partial provisioning failure")
@@ -462,6 +463,7 @@ func TestPartialMessageRetryDoesNotReplaceAlreadyCompletedCapacity(t *testing.T)
 	for n, network := range f.snapshot() {
 		f.cleanup(n, network)
 	} // First runner finished before retry.
+	want = 1 // The authenticated service snapshot now excludes completed work.
 	fail = false
 	if err := f.Scale(context.Background(), msg); err != nil {
 		t.Fatal(err)

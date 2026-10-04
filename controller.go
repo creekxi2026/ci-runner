@@ -76,6 +76,8 @@ type fleet struct {
 	idle, lifetime                time.Duration
 	stopping                      bool
 	unregister                    bool
+	demandSource                  func(context.Context) (int, error)
+	changes                       chan struct{}
 }
 
 func (f *fleet) labels() obj { return obj{"ci-runner.owner": f.owner} }
@@ -95,6 +97,9 @@ func secure() obj {
 }
 func (f *fleet) cleanup(name, network string) {
 	j := f.state(name)
+	if j == nil {
+		return
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.cleaning = true
@@ -109,11 +114,7 @@ func (f *fleet) address(ctx context.Context, name, network string) (string, erro
 	err := dockerContext(ctx, "GET", "/containers/"+name+"/json", nil, &v)
 	return v.NetworkSettings.Networks[network].IPAddress, err
 }
-func (f *fleet) start(ctx context.Context) error {
-	var consumed bool
-	return f.startTracked(ctx, &consumed)
-}
-func (f *fleet) startTracked(ctx context.Context, consumed *bool) (err error) {
+func (f *fleet) start(ctx context.Context) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -192,7 +193,7 @@ func (f *fleet) startTracked(ctx context.Context, consumed *bool) (err error) {
 	h := secure()
 	h["Memory"] = 1536 * 1024 * 1024
 	h["ReadonlyRootfs"] = true
-	h["Tmpfs"] = obj{"/home/runner": "rw,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700", "/tmp": "rw,size=128m,nr_inodes=32768,mode=1777"}
+	h["Tmpfs"] = obj{"/home/runner": "rw,exec,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700", "/tmp": "rw,exec,size=128m,nr_inodes=32768,mode=1777"}
 	if err = f.createContext(ctx, name, f.image, "1001", []string{"/opt/ci/runner.sh"}, env, h, network); err != nil {
 		return
 	}
@@ -218,7 +219,6 @@ func (f *fleet) startTracked(ctx context.Context, consumed *bool) (err error) {
 	}
 	// A lost response may still have released the runner. Preserve it for reap.
 	released = true
-	*consumed = true
 	if err = dockerContext(ctx, "POST", "/exec/"+ex.ID+"/start", obj{"Detach": false, "Tty": false}, nil); err != nil {
 		return
 	}
@@ -265,6 +265,9 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	for _, event := range msg.JobStartedMessages {
 		if _, ok := f.snapshot()[event.RunnerName]; ok {
 			j := f.state(event.RunnerName)
+			if j == nil {
+				continue
+			}
 			j.mu.Lock()
 			j.busy = true
 			j.mu.Unlock()
@@ -278,22 +281,17 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 			}
 		}
 	}
-	if !p.planned {
-		if msg.Statistics != nil {
-			p.remaining = additions(msg.Statistics.TotalAssignedJobs, len(f.snapshot()))
-		}
-		p.planned = true
-	}
-	// Freeze this message's additions. Completed runners must not be replaced
-	// using the same old statistics when a later addition fails and retries.
-	for p.remaining > 0 {
-		var consumed bool
-		err := f.startTracked(ctx, &consumed)
-		if consumed {
-			p.remaining--
-		}
-		if err != nil {
+	if f.demandSource != nil {
+		if err := f.reconcileCurrent(ctx); err != nil {
 			return err
+		}
+	} else if msg.Statistics != nil {
+		// Isolated handlers can use the supplied snapshot; run() always installs
+		// the live scale-set demand source for recovery and retry reconciliation.
+		for range additions(msg.Statistics.TotalAssignedJobs, len(f.snapshot())) {
+			if err := f.start(ctx); err != nil {
+				return err
+			}
 		}
 	}
 	p.done = true
@@ -350,6 +348,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	f.changes = make(chan struct{}, 1)
+	f.demandSource = scaleSetDemand(c, os.Getenv("SCALE_SET_NAME"), func() int { _, id := f.api(); return id })
 	// Recovery and the local janitor start before registration/session acquisition.
 	if err = f.recover(); err != nil {
 		return err

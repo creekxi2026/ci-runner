@@ -16,12 +16,13 @@ class ReleaseEnvironment(unittest.TestCase):
     def test_complete_pair_is_digest_pinned(self):
         module = self.module()
         meta = {name: {"containerimage.digest": "sha256:" + char * 64}
-                for name, char in (("controller", "a"), ("runner", "b"))}
+                for name, char in (("controller", "a"), ("runner", "b"), ("postgres", "d"))}
         result = module.render("creekxi2026/ci-runner", "c" * 40, meta)
         self.assertIn("CONTROLLER_IMAGE=ghcr.io/creekxi2026/ci-runner@sha256:" + "a" * 64, result)
         self.assertIn("RUNNER_IMAGE=ghcr.io/creekxi2026/ci-runner@sha256:" + "b" * 64, result)
         self.assertNotIn(":controller\n", result)
         self.assertIn("IMAGE_REVISION=" + "c" * 40, result)
+        self.assertIn("POSTGRES_IMAGE=ghcr.io/creekxi2026/ci-runner@sha256:" + "d" * 64, result)
 
     def test_partial_publication_cannot_produce_deployment(self):
         module = self.module()

@@ -23,7 +23,7 @@ docker compose up -d
 
 Use the selected scale-set label in `runs-on`. The included smoke workflow defaults to four successful jobs with hard concurrency **three**. Set `fail_slot4=true` only when deliberately exercising failed-job cleanup.
 
-The [blank configuration template](.env.example) is also available for manual setup. All image digests and `IMAGE_REVISION` must come from the same successful build's environment; the controller rejects floating workload images, wrong architectures and a mismatched runner revision. Both image pushes must succeed before the deployment artifact is published. Partial candidate pushes never update default deployment references.
+The [blank configuration template](.env.example) is also available for manual setup. All image digests and `IMAGE_REVISION` must come from the same successful build's environment; the controller rejects floating workload images, wrong architectures and a mismatched runner revision. All three image pushes must succeed before the deployment artifact is published. Partial candidate pushes never update default deployment references.
 
 ## Lifecycle and storage
 
@@ -45,7 +45,7 @@ A short-lived NET_ADMIN helper installs namespace firewall rules and is removed 
 
 Download a new successful deployment artifact. Update the existing `.env` **image digest pair, source revision and PostgreSQL digest**, preserving private settings and credentials. Pull all selected images before `docker compose up -d`; do not replace `.env` wholesale with a generic template. Runner automatic updates are enabled separately from image/toolchain publishing.
 
-Base images and PostgreSQL are digest pinned. Apt uses fixed, signed repository snapshots; signature checks remain enabled (snapshot expiry checks are intentionally disabled). Refresh snapshots and dependencies through a reviewed image rebuild, not mutable installation during jobs.
+Base images and PostgreSQL are digest pinned. The exact official PostgreSQL dependency is mirrored by the cloud build into GHCR, so the execution host does not need Docker Hub access. Apt uses fixed, signed repository snapshots; signature checks remain enabled (snapshot expiry checks are intentionally disabled). Refresh snapshots and dependencies through a reviewed image rebuild, not mutable installation during jobs.
 
 ```sh
 go test -race ./...

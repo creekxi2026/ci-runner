@@ -29,8 +29,7 @@ type jobState struct {
 	gate                         bool
 }
 type messageProgress struct {
-	acquired, done, planned bool
-	remaining               int
+	acquired, done bool
 }
 
 func jobName(n string) string {
@@ -48,6 +47,9 @@ func (f *fleet) resourceLabels(n string) obj {
 func (f *fleet) state(n string) *jobState {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if _, exists := f.jobs[n]; !exists {
+		return nil
+	}
 	if f.states == nil {
 		f.states = map[string]*jobState{}
 	}
@@ -109,6 +111,7 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 	delete(f.jobs, n)
 	delete(f.states, n)
 	f.mu.Unlock()
+	f.changed()
 }
 
 type containerState struct {
@@ -123,6 +126,9 @@ type containerState struct {
 func (f *fleet) reap() {
 	for n, network := range f.snapshot() {
 		j := f.state(n)
+		if j == nil {
+			continue
+		}
 		if !j.mu.TryLock() {
 			continue
 		}
@@ -297,6 +303,19 @@ func (f *fleet) recover() error {
 func (f *fleet) maintain(ctx context.Context, interval time.Duration) {
 	for {
 		f.reap()
+		select {
+		case <-f.changes:
+			if f.demandSource != nil && f.scaleMu.TryLock() {
+				err := f.reconcileCurrent(ctx)
+				f.scaleMu.Unlock()
+				if err != nil && ctx.Err() == nil {
+					f.changed()
+				}
+			} else if ctx.Err() == nil {
+				f.changed()
+			}
+		default:
+		}
 		if !pause(ctx, interval) {
 			return
 		}
@@ -314,7 +333,7 @@ func (f *fleet) listen(ctx context.Context, delay time.Duration) error {
 	delete(f.messages, bootstrapID)
 	f.scaleMu.Unlock()
 	session := f.session.Session()
-	if session.Statistics != nil {
+	if session.Statistics != nil || f.demandSource != nil {
 		initial := &scaleset.RunnerScaleSetMessage{MessageID: bootstrapID, Statistics: session.Statistics}
 		if err := retrySession(ctx, delay, func() error { return f.Scale(ctx, initial) }); err != nil {
 			return err

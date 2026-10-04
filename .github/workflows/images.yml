@@ -31,7 +31,7 @@ jobs:
           mkdir -p deployment
           printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
-          for target in controller runner; do
+          for target in controller runner postgres; do
             docker buildx build --platform linux/arm64 --provenance=false --target "$target" \
               --build-arg SOURCE_REVISION="$GITHUB_SHA" \
               --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
