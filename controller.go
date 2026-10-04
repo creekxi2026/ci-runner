@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/actions/scaleset"
 	"github.com/actions/scaleset/listener"
@@ -21,6 +22,8 @@ import (
 )
 
 func additions(want, current int) int { return max(0, min(3, want)-current) }
+
+var errMissing = errors.New("docker resource missing")
 
 var engine = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
@@ -40,6 +43,12 @@ func docker(method, path string, body any, out any) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		if method == "DELETE" {
+			return nil
+		}
+		return errMissing
+	}
 	if resp.StatusCode >= 300 {
 		io.Copy(io.Discard, resp.Body)
 		return fmt.Errorf("docker %s %s status %d", method, path, resp.StatusCode)
@@ -74,10 +83,19 @@ func secure() obj {
 	return obj{"CapDrop": []string{"ALL"}, "SecurityOpt": []string{"no-new-privileges:true"}, "PidsLimit": 512, "Memory": int64(1536 * 1024 * 1024), "NanoCpus": int64(2e9)}
 }
 func (f *fleet) cleanup(name, network string) {
+	failed := false
 	for _, n := range []string{name + "-fw", name, name + "-pg", name + "-proxy"} {
-		_ = docker("DELETE", "/containers/"+n+"?force=true&v=true", nil, nil)
+		if err := docker("DELETE", "/containers/"+n+"?force=true&v=true", nil, nil); err != nil {
+			log.Printf("cleanup retry needed for %s", n)
+			failed = true
+		}
 	}
-	_ = docker("DELETE", "/networks/"+network, nil, nil)
+	if err := docker("DELETE", "/networks/"+network, nil, nil); err != nil {
+		failed = true
+	}
+	if failed {
+		return
+	}
 	delete(f.jobs, name)
 	log.Printf("removed job %s", name)
 }
@@ -101,9 +119,11 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if err = docker("POST", "/networks/create", obj{"Name": network, "Internal": true, "EnableIPv6": true, "Labels": f.labels()}, nil); err != nil {
 		return
 	}
+	f.jobs[name] = network
 	hp := secure()
 	hp["ReadonlyRootfs"] = true
-	hp["Memory"] = 256 * 1024 * 1024
+	hp["Memory"] = 128 * 1024 * 1024
+	hp["NanoCpus"] = int64(250000000)
 	if err = f.create(name+"-proxy", f.image, "1001", []string{"python3", "/opt/ci/egress.py"}, nil, hp, network); err != nil {
 		return
 	}
@@ -117,7 +137,8 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	pg := secure()
 	pg["Tmpfs"] = obj{"/var/lib/postgresql/data": "rw,size=512m", "/var/run/postgresql": "rw,size=16m"}
 	pg["ReadonlyRootfs"] = true
-	pg["Memory"] = 768 * 1024 * 1024
+	pg["Memory"] = 512 * 1024 * 1024
+	pg["NanoCpus"] = int64(500000000)
 	if err = f.create(name+"-pg", "postgres:17-bookworm", "999", []string{"postgres"}, []string{"POSTGRES_PASSWORD=ci-disposable", "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}, pg, network); err != nil {
 		return
 	}
@@ -132,7 +153,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	proxyURL := "http://" + proxy + ":3128"
 	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1," + database, "NO_PROXY=localhost,127.0.0.1," + database, "DATABASE_URL=postgres://postgres:ci-disposable@" + database + ":5432/ci?sslmode=disable", "CI_DATABASE_HOST=" + database}
 	h := secure()
-	h["Memory"] = 2 * 1024 * 1024 * 1024
+	h["Memory"] = 1536 * 1024 * 1024
 	if err = f.create(name, f.image, "1001", []string{"/opt/ci/runner.sh"}, env, h, network); err != nil {
 		return
 	}
@@ -149,7 +170,9 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if result.StatusCode != 0 {
 		return fmt.Errorf("firewall setup failed")
 	}
-	_ = docker("DELETE", "/containers/"+name+"-fw?force=true", nil, nil)
+	if err = docker("DELETE", "/containers/"+name+"-fw?force=true", nil, nil); err != nil {
+		return err
+	}
 	var ex struct{ ID string }
 	if err = docker("POST", "/containers/"+name+"/exec", obj{"User": "1001", "Cmd": []string{"touch", "/tmp/ci-network-ready"}}, &ex); err != nil {
 		return
@@ -164,7 +187,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 func (f *fleet) reap() {
 	for name, n := range f.jobs {
 		var v struct{ State struct{ Running bool } }
-		if err := docker("GET", "/containers/"+name+"/json", nil, &v); err == nil && !v.State.Running {
+		if err := docker("GET", "/containers/"+name+"/json", nil, &v); errors.Is(err, errMissing) || (err == nil && !v.State.Running) {
 			f.cleanup(name, n)
 		}
 	}
@@ -243,7 +266,9 @@ func run() error {
 	}
 	for _, v := range containers {
 		for _, n := range v.Names {
-			_ = docker("DELETE", "/containers/"+n[1:]+"?force=true&v=true", nil, nil)
+			if err = docker("DELETE", "/containers/"+n[1:]+"?force=true&v=true", nil, nil); err != nil {
+				return err
+			}
 		}
 	}
 	var networks []struct{ ID string }
@@ -251,7 +276,9 @@ func run() error {
 		return err
 	}
 	for _, v := range networks {
-		_ = docker("DELETE", "/networks/"+v.ID, nil, nil)
+		if err = docker("DELETE", "/networks/"+v.ID, nil, nil); err != nil {
+			return err
+		}
 	}
 	defer func() {
 		f.mu.Lock()
