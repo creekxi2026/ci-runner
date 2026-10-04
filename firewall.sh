@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 for cmd in iptables ip6tables; do
+ "$cmd" -F INPUT
+ "$cmd" -P INPUT DROP
+ "$cmd" -A INPUT -i lo -j ACCEPT
+ "$cmd" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
  "$cmd" -F OUTPUT
  "$cmd" -P OUTPUT DROP
  "$cmd" -A OUTPUT -o lo -j ACCEPT
