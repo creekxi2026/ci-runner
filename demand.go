@@ -43,6 +43,29 @@ func (f *fleet) changed() {
 	}
 }
 
+// Scheduling can block on GitHub/Docker; never run it in the local janitor.
+func (f *fleet) coordinate(ctx context.Context, interval time.Duration) {
+	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-f.changes:
+			if f.demandSource != nil && f.scaleMu.TryLock() {
+				err := f.reconcileCurrent(ctx)
+				f.scaleMu.Unlock()
+				if err != nil && ctx.Err() == nil {
+					f.changed()
+				}
+			} else if ctx.Err() == nil {
+				f.changed()
+			}
+		}
+		if !pause(ctx, interval) {
+			return
+		}
+	}
+}
+
 func scaleSetDemand(client scaleSets, name string, expectedID func() int) func(context.Context) (int, error) {
 	return func(ctx context.Context) (int, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

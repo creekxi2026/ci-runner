@@ -303,19 +303,6 @@ func (f *fleet) recover() error {
 func (f *fleet) maintain(ctx context.Context, interval time.Duration) {
 	for {
 		f.reap()
-		select {
-		case <-f.changes:
-			if f.demandSource != nil && f.scaleMu.TryLock() {
-				err := f.reconcileCurrent(ctx)
-				f.scaleMu.Unlock()
-				if err != nil && ctx.Err() == nil {
-					f.changed()
-				}
-			} else if ctx.Err() == nil {
-				f.changed()
-			}
-		default:
-		}
 		if !pause(ctx, interval) {
 			return
 		}

@@ -358,6 +358,8 @@ func run() error {
 	defer stopLocal()
 	localDone := make(chan struct{})
 	go func() { defer close(localDone); f.maintain(localCtx, 10*time.Second) }()
+	coordinatorDone := make(chan struct{})
+	go func() { defer close(coordinatorDone); f.coordinate(ctx, 10*time.Second) }()
 	retry(ctx, time.Second, func() error {
 		set, e := ensureScaleSet(ctx, c, os.Getenv("SCALE_SET_NAME"))
 		if e != nil {
@@ -381,10 +383,12 @@ func run() error {
 	log.Print("shutdown: scheduling stopped; draining until jobs exit or reach lifetime")
 	drained := f.drain(time.Second)
 	stopLocal()
-	select {
-	case <-localDone:
-	case <-time.After(time.Second):
-		return fmt.Errorf("shutdown: local I/O still pending; labeled resources retained for recovery")
+	for _, done := range []chan struct{}{localDone, coordinatorDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			return fmt.Errorf("shutdown: local I/O still pending; labeled resources retained for recovery")
+		}
 	}
 	if !drained {
 		return fmt.Errorf("drain deadline reached; remaining resources require recovery")

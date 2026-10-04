@@ -82,7 +82,10 @@ func TestLocalCleanupRechecksUnservedDemand(t *testing.T) {
 	f.state("tombstone").cleaning = true
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); f.coordinate(ctx, time.Millisecond) }()
 	f.maintain(ctx, time.Millisecond)
+	<-done
 	if api.generated != 1 || len(f.snapshot()) != 1 {
 		t.Fatalf("cleanup lost assigned demand: JIT=%d jobs=%d", api.generated, len(f.snapshot()))
 	}
