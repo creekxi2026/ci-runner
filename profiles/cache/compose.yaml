@@ -1,0 +1,44 @@
+# Shared cache for trusted CI jobs; no GitHub registration or pool changes.
+name: ci-deps-linux-arm64
+services:
+  verify:
+    image: ghcr.io/creekxi2026/ci-runner-runner@sha256:fd006fc20579487c9f23bf248f97e8c9ce3e49bf31a6387cb40507391dfd4f9f
+    pull_policy: never
+    user: '1001:1001'
+    environment:
+      CI_CACHE_ABI: ubuntu24-038394a
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 4g
+    memswap_limit: 4g
+    cpus: 2
+    pids_limit: 512
+    tmpfs:
+      - /home/runner:rw,exec,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700
+      - /tmp:rw,exec,size=1g,nr_inodes=65536,mode=1777
+    volumes:
+      - type: volume
+        source: cache
+        target: /opt/ci-cache
+        volume:
+          nocopy: true
+          subpath: data
+      - type: volume
+        source: cache
+        target: /opt/ci-tools
+        read_only: true
+        volume:
+          nocopy: true
+          subpath: data/tools
+      - type: bind
+        source: ../..
+        target: /opt/ci
+        read_only: true
+    entrypoint: [bash, -ec, '. /opt/ci/cache-env.sh; exec "$$@"', cache-job]
+    command: [bash, -ec, 'node --version; go version']
+volumes:
+  cache:
+    external: true
+    name: ${CI_RUNNER_CACHE_VOLUME:-ci-deps-linux-arm64}

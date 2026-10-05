@@ -54,6 +54,7 @@ fleets. To opt in, use a **separate audited manual-only deployment**:
 RUNNER_ALLOWED_EVENTS=workflow_dispatch
 DEPENDENCY_CACHE_MODE=trusted-manual
 DEPENDENCY_CACHE_TRUST_LANE=reviewed-main
+DEPENDENCY_CACHE_VOLUME=ci-deps-linux-arm64
 ```
 
 The trust lane must match `[a-z0-9][a-z0-9_-]{0,63}`. It is an operator assertion,
@@ -66,29 +67,45 @@ fails startup with caching enabled. The SDK cannot attest head/fork/actor trust,
 and capacity-based provisioning cannot bind a new runner to one queued request;
 there is no automatic per-event/ref trust partitioning.
 
-The controller creates one Docker-managed local named volume
-`ci-deps-linux-arm64-<sha256>` per exact repository URL, deployment ID, trust lane
-and `v1/linux-arm64/trusted-manual` schema. Labels use `ci-runner.cache-*`, never
-job/owner discovery labels. Existing foreign labels or driver options fail closed.
-No cache is created or mounted when disabled. Compose passes configuration only; the
-controller owns volume creation, so `compose down -v` does not manage these caches.
+The controller creates or adopts the readable named volume
+`ci-deps-linux-arm64` (`DEPENDENCY_CACHE_VOLUME` can select another readable name).
+Deployment, exact repository and trust lane remain in strict `ci-runner.cache-*`
+labels under the `v2-linux-arm64-trusted-manual` schema. They are not discarded
+when the name loses its hash. Reusing a name with foreign labels fails closed;
+choose a separate explicit name for a different deployment/trust scope. No volume
+is created or mounted when caching is off, and job cleanup never deletes a volume.
+
+Controller jobs and `profiles/cache/compose.yaml` use the **same** initializer,
+`data` layout, `cache-env.sh`, and immutable optional tool mount. The standalone
+profile is a preparation/verification entrypoint, not a second cache scheme.
 
 | Persistent subdirectory | Job configuration |
 |---|---|
-| `npm` | Only `/home/runner/.npm/_cacache` links here; `npm_config_cache=/home/runner/.npm` |
-| `pip` | `PIP_CACHE_DIR=/opt/ci-cache/pip` (HTTP downloads and cached wheels) |
-| `gomod` | `GOMODCACHE=/opt/ci-cache/gomod` |
-| `go-build` | `GOCACHE=/opt/ci-cache/go-build` |
+| `data/npm/_cacache` | Only package cache is linked into private `$HOME/.npm` |
+| `data/pip` | `PIP_CACHE_DIR=/opt/ci-cache/pip` |
+| `data/gomod` | `GOMODCACHE=/opt/ci-cache/gomod` |
+| `data/go-build/<target>-<Go>-<ABI>` | Shared Go compilation/test results |
+| `data/jest/node<major>` | `CI_JEST_CACHE_DIR`; caller opts into Jest cacheDirectory |
+| `data/tools` | Optional verified tool distributions/wheels, root-owned and read-only |
 
-The volume mounts at `/opt/ci-cache` with `nocopy`. HOME, workspaces, diagnostics,
-node_modules, npx installed tools, auth/config, databases and registration remain
-private/disposable. Image toolchains stay immutable; no shared installed toolchain
-or generic tool-archive cache is introduced. Do not place credentials in caches;
-private package/module contents themselves can be confidential.
+The controller's transient helper mounts the whole volume to initialize root-owned
+metadata. Workers mount only `data` at `/opt/ci-cache` and `data/tools` read-only at
+`/opt/ci-tools` using Docker volume subpaths. Data/tools roots cannot be replaced
+by UID 1001. Tool versions are detected without downloads. The ABI key in the
+controller and standalone recipe must track native-library changes.
+HOME, workspaces, node_modules, npx installations, auth/config, databases and
+registration remain private. Do not place credentials in caches; even private
+package/module contents themselves can be confidential.
+
+For already warmed data, use the explicit import workflow in `profiles/cache`.
+Set its owner/repository/lane to the controller's configuration so the same volume
+can be adopted. The old hash-named v1 volume has a different flat layout and must
+not be silently adopted/relabelled. Keep it until a reviewed migration/cutover has
+completed; changing the source code does not switch a running controller.
 
 A network-disabled transient root helper opens fixed directories using
-no-follow descriptors and changes only their ownership/mode to UID/GID 1001 and
-0700. It never recursively chowns/chmods package contents. The existing transient
+no-follow descriptors and changes only cache-root ownership/mode to UID/GID 1001
+and 0700; it serializes initialization using a root-owned volume lock. It never recursively chowns/chmods package contents. The existing transient
 helper slot is reused and reclaimed by job recovery. Jobs remain UID 1001 with
 no capabilities or Docker authority. Named volumes survive all job cleanup.
 Package managers retain their native content-addressing, lock and atomic-write

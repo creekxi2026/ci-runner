@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,6 +44,9 @@ func TestCacheMountInitializationAndOwnership(t *testing.T) {
 			if len(caps) != 3 || caps[0] != "CHOWN" || caps[1] != "DAC_OVERRIDE" || caps[2] != "FOWNER" {
 				t.Error("initializer must retain FOWNER to chmod directories after ownership changes")
 			}
+			if !reflect.DeepEqual(b["Cmd"], []any{"python3", "/opt/ci/cache-init.py", "--volume-root", "/opt/ci-cache-volume"}) {
+				t.Fatalf("wrong initializer: %v", b["Cmd"])
+			}
 			initialized = true
 		case strings.HasSuffix(r.URL.Path, "/wait"):
 			json.NewEncoder(w).Encode(obj{"StatusCode": 0})
@@ -63,8 +67,12 @@ func TestCacheMountInitializationAndOwnership(t *testing.T) {
 	if !created || !initialized || !removed {
 		t.Fatal("incomplete initialization")
 	}
-	if len(host["Mounts"].([]obj)) != 1 || len(env) != 5 {
+	if len(host["Mounts"].([]obj)) != 2 || len(env) != 6 {
 		t.Fatalf("mount/env missing: %v %v", host, env)
+	}
+	mounts := host["Mounts"].([]obj)
+	if mounts[0]["Target"] != "/opt/ci-cache" || mounts[0]["VolumeOptions"].(obj)["Subpath"] != "data" || mounts[1]["Target"] != "/opt/ci-tools" || mounts[1]["ReadOnly"] != true || mounts[1]["VolumeOptions"].(obj)["Subpath"] != "data/tools" {
+		t.Fatal("worker must mount canonical data and read-only tools")
 	}
 	f.cache = nil
 	host = secure()
@@ -75,7 +83,7 @@ func TestCacheMountInitializationAndOwnership(t *testing.T) {
 }
 
 func TestCacheRejectsForeignVolumeAndFailedInitializer(t *testing.T) {
-	for _, failure := range []string{"foreign", "driver", "options", "exit", "missing-exit"} {
+	for _, failure := range []string{"foreign", "repository", "lane", "driver", "options", "exit", "missing-exit"} {
 		t.Run(failure, func(t *testing.T) {
 			events, _ := allowedEvents("workflow_dispatch")
 			c, _ := dependencyCacheConfig("trusted-manual", "main", "https://github.com/acme/repo", "private", events)
@@ -87,6 +95,12 @@ func TestCacheRejectsForeignVolumeAndFailedInitializer(t *testing.T) {
 					options := obj{}
 					if failure == "foreign" {
 						labels["ci-runner.cache-owner"] = "foreign"
+					}
+					if failure == "repository" {
+						labels["ci-runner.cache-repository"] = "https://github.com/acme/other"
+					}
+					if failure == "lane" {
+						labels["ci-runner.cache-lane"] = "untrusted"
 					}
 					if failure == "driver" {
 						driver = "nfs"
@@ -145,11 +159,32 @@ func TestCacheOptInAndTrustBoundary(t *testing.T) {
 		{"main", "https://github.com/acme/repo", "public"},
 	} {
 		b, err := dependencyCacheConfig("trusted-manual", tc.lane, tc.repo, tc.owner, events)
-		if err != nil || a.volume == b.volume {
-			t.Fatalf("cache namespace collision: %v", err)
+		if err != nil || a.volume != b.volume || reflect.DeepEqual(a.labels(), b.labels()) {
+			t.Fatalf("human-readable name must retain distinct ownership labels: %v", err)
 		}
 	}
 	if a.labels()["ci-runner.job"] != nil || a.labels()["ci-runner.owner"] != nil {
 		t.Fatal("cache matches janitor resources")
+	}
+}
+
+func TestCacheExplicitReadableName(t *testing.T) {
+	events, _ := allowedEvents("workflow_dispatch")
+	for _, name := range []string{"", "ci-deps-linux-arm64", "ci-deps-linux-arm64-secondary"} {
+		c, err := dependencyCacheConfig("trusted-manual", "main", "https://github.com/acme/repo", "private", events, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "" {
+			name = "ci-deps-linux-arm64"
+		}
+		if c.volume != name {
+			t.Fatal(c.volume)
+		}
+	}
+	for _, name := range []string{"../cache", "/cache", "cache/name", "cache name"} {
+		if _, err := dependencyCacheConfig("trusted-manual", "main", "https://github.com/acme/repo", "private", events, name); err == nil {
+			t.Fatal("invalid name accepted", name)
+		}
 	}
 }

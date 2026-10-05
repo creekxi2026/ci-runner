@@ -318,7 +318,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	cache, err := dependencyCacheConfig(os.Getenv("DEPENDENCY_CACHE_MODE"), os.Getenv("DEPENDENCY_CACHE_TRUST_LANE"), os.Getenv("GITHUB_CONFIG_URL"), os.Getenv("DEPLOYMENT_ID"), events)
+	cache, err := dependencyCacheConfig(os.Getenv("DEPENDENCY_CACHE_MODE"), os.Getenv("DEPENDENCY_CACHE_TRUST_LANE"), os.Getenv("GITHUB_CONFIG_URL"), os.Getenv("DEPLOYMENT_ID"), events, os.Getenv("DEPENDENCY_CACHE_VOLUME"))
 	if err != nil {
 		return err
 	}

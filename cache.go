@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -14,7 +13,7 @@ type dependencyCache struct{ volume, owner, repository, lane string }
 
 // Dispatch metadata is not source attestation; opt-in is restricted to a
 // dedicated operator-audited manual-only fleet, never a mixed-event fleet.
-func dependencyCacheConfig(mode, lane, repository, owner string, events map[string]bool) (*dependencyCache, error) {
+func dependencyCacheConfig(mode, lane, repository, owner string, events map[string]bool, names ...string) (*dependencyCache, error) {
 	if mode == "" || mode == "off" {
 		return nil, nil
 	}
@@ -28,8 +27,15 @@ func dependencyCacheConfig(mode, lane, repository, owner string, events map[stri
 	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !regexp.MustCompile(`^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(u.Path) {
 		return nil, fmt.Errorf("dependency cache requires exact GitHub repository URL")
 	}
-	identity := fmt.Sprintf("v1\x00%s\x00%s\x00linux-arm64\x00trusted-manual\x00%s", owner, repository, lane)
-	return &dependencyCache{volume: fmt.Sprintf("ci-deps-linux-arm64-%x", sha256.Sum256([]byte(identity))), owner: owner, repository: repository, lane: lane}, nil
+	volume := "ci-deps-linux-arm64"
+	if len(names) > 0 && names[0] != "" {
+		volume = names[0]
+	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,127}$`).MatchString(volume) {
+		return nil, fmt.Errorf("invalid dependency cache volume name")
+	}
+	// Scope remains in strict ownership labels, not in an opaque volume suffix.
+	return &dependencyCache{volume: volume, owner: owner, repository: repository, lane: lane}, nil
 }
 
 // Named volumes survive container removal (including Docker's v=true). No
@@ -65,7 +71,7 @@ func (f *fleet) prepareDependencyCache(ctx context.Context, job string, host obj
 			return nil, fmt.Errorf("dependency cache volume ownership mismatch")
 		}
 	}
-	mounts := []obj{{"Type": "volume", "Source": c.volume, "Target": "/opt/ci-cache", "ReadOnly": false, "VolumeOptions": obj{"NoCopy": true}}}
+	mounts := []obj{{"Type": "volume", "Source": c.volume, "Target": "/opt/ci-cache-volume", "ReadOnly": false, "VolumeOptions": obj{"NoCopy": true}}}
 	h := secure()
 	h["ReadonlyRootfs"] = true
 	h["CapAdd"] = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER"}
@@ -74,7 +80,7 @@ func (f *fleet) prepareDependencyCache(ctx context.Context, job string, host obj
 	// Reuse the existing tracked transient helper slot; it is removed before
 	// firewall setup, and crash recovery already knows this job companion.
 	helper := job + "-fw"
-	if err = f.createContext(ctx, helper, f.image, "0", []string{"python3", "/opt/ci/cache-init.py"}, nil, h, "none"); err != nil {
+	if err = f.createContext(ctx, helper, f.image, "0", []string{"python3", "/opt/ci/cache-init.py", "--volume-root", "/opt/ci-cache-volume"}, nil, h, "none"); err != nil {
 		return nil, err
 	}
 	var result struct{ StatusCode *int }
@@ -87,10 +93,13 @@ func (f *fleet) prepareDependencyCache(ctx context.Context, job string, host obj
 	if err = dockerContext(ctx, "DELETE", "/containers/"+helper+"?force=true", nil, nil); err != nil {
 		return nil, err
 	}
-	host["Mounts"] = mounts
-	return append(env, "npm_config_cache=/home/runner/.npm", "PIP_CACHE_DIR=/opt/ci-cache/pip", "GOMODCACHE=/opt/ci-cache/gomod", "GOCACHE=/opt/ci-cache/go-build"), nil
+	host["Mounts"] = []obj{
+		{"Type": "volume", "Source": c.volume, "Target": "/opt/ci-cache", "ReadOnly": false, "VolumeOptions": obj{"NoCopy": true, "Subpath": "data"}},
+		{"Type": "volume", "Source": c.volume, "Target": "/opt/ci-tools", "ReadOnly": true, "VolumeOptions": obj{"NoCopy": true, "Subpath": "data/tools"}},
+	}
+	return append(env, "npm_config_cache=/home/runner/.npm", "PIP_CACHE_DIR=/opt/ci-cache/pip", "GOMODCACHE=/opt/ci-cache/gomod", "CI_DEPENDENCY_CACHE=1", "CI_CACHE_ABI=ubuntu24-038394a"), nil
 }
 
 func (c *dependencyCache) labels() obj {
-	return obj{"ci-runner.cache-owner": c.owner, "ci-runner.cache-repository": c.repository, "ci-runner.cache-lane": c.lane, "ci-runner.cache-schema": "v1-linux-arm64-trusted-manual"}
+	return obj{"ci-runner.cache-owner": c.owner, "ci-runner.cache-repository": c.repository, "ci-runner.cache-lane": c.lane, "ci-runner.cache-schema": "v2-linux-arm64-trusted-manual"}
 }

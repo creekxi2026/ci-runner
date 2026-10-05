@@ -49,7 +49,8 @@ class DependencyCacheTests(unittest.TestCase):
         compose = (ROOT / 'compose.yaml').read_text()
         self.assertIn('DEPENDENCY_CACHE_MODE: ${DEPENDENCY_CACHE_MODE:-off}', compose)
         self.assertIn('npm_config_cache=/home/runner/.npm', (ROOT / 'cache.go').read_text())
-        self.assertIn('ln -s /opt/ci-cache/npm /home/runner/.npm/_cacache', (ROOT / 'runner.sh').read_text())
+        self.assertIn('. /opt/ci/cache-env.sh', (ROOT / 'runner.sh').read_text())
+        self.assertIn('DEPENDENCY_CACHE_VOLUME:', compose)
         self.assertIn('DEPENDENCY_CACHE_TRUST_LANE:', compose)
 
     def test_symlink_preflight_has_no_partial_ownership_changes(self):
@@ -64,6 +65,33 @@ class DependencyCacheTests(unittest.TestCase):
             self.assertFalse((root / 'pip').exists())
             with self.assertRaises(OSError):
                 module.initialize(str(root / 'go-build'), os.getuid(), os.getgid())
+
+    def test_controller_volume_layout_preserves_cache_and_tool_permissions(self):
+        module = self.load()
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            module.initialize_volume(root, os.getuid(), os.getgid())
+            payload = root/'data'/'npm'/'_cacache'/'fixture'
+            payload.write_text('retained')
+            payload.chmod(0o400)
+            module.initialize_volume(root, os.getuid(), os.getgid())
+            self.assertEqual(payload.read_text(), 'retained')
+            self.assertEqual(payload.stat().st_mode & 0o777, 0o400)
+            self.assertEqual((root/'data'/'tools').stat().st_mode & 0o777, 0o755)
+            self.assertTrue((root/'data'/'jest').is_dir())
+
+    def test_controller_rejects_tools_symlink_and_unknown_layout(self):
+        module = self.load()
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            root = Path(root)
+            (root/'data').mkdir()
+            (root/'data'/'tools').symlink_to(outside)
+            with self.assertRaises(OSError): module.initialize_volume(root, os.getuid(), os.getgid())
+            self.assertFalse((root/'data'/'npm').exists())
+            (root/'data'/'tools').unlink()
+            (root/'data'/'ready.json').write_text('{"schema":"unknown"}')
+            with self.assertRaises(ValueError): module.initialize_volume(root, os.getuid(), os.getgid())
+            self.assertFalse((root/'data'/'npm').exists())
 
 if __name__ == '__main__':
     unittest.main()
