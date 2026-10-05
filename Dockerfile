@@ -37,6 +37,7 @@ RUN curl -fsSL https://github.com/actions/runner/releases/download/v2.337.0/acti
  && tar -xzf /runner.tar.gz && rm /runner.tar.gz && chown -R runner:runner /home/runner /opt/actions-runner
 COPY --from=build /usr/local/go /opt/go
 ENV PATH="/opt/go/bin:${PATH}"
+ENV GOPROXY=https://goproxy.cn GOSUMDB=sum.golang.org
 COPY egress.py firewall.sh runner.sh toolcache-init.sh /opt/ci/
 RUN chmod 755 /opt/ci/*.sh
 WORKDIR /home/runner
