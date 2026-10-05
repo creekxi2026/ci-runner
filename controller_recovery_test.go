@@ -188,6 +188,9 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 				if v.HostConfig["Memory"].(float64) != 4*1024*1024*1024 {
 					t.Error("runner memory must remain bounded at the 4 GiB budget")
 				}
+				if v.HostConfig["MemorySwap"] != v.HostConfig["Memory"] {
+					t.Error("runner must not receive Docker's default extra swap allowance")
+				}
 			}
 			if v.Labels["ci-runner.owner"] != "unit" || v.Labels["ci-runner.job"] != jobName(name) {
 				t.Error("missing recovery identity")

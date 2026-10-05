@@ -184,6 +184,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1"}
 	h := secure()
 	h["Memory"] = 4 * 1024 * 1024 * 1024
+	h["MemorySwap"] = h["Memory"]
 	h["ReadonlyRootfs"] = true
 	h["Tmpfs"] = obj{"/home/runner": "rw,exec,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700", "/tmp": "rw,exec,size=1g,nr_inodes=32768,mode=1777"}
 	env, err = f.prepareDependencyCache(ctx, name, h, env)
