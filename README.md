@@ -35,15 +35,81 @@ Registry multi-tag publication is **not atomic**: a failed promotion can leave a
 
 ## Lifecycle and storage
 
-- Only the controller runs without demand. Each job receives a private runner, proxy and internal IPv4/IPv6 network. PostgreSQL is **opt-in per job**, not created by default. There are **no persistent CI volumes or shared writable caches**.
+- Only the controller runs without demand. Each job receives a private runner, proxy and internal IPv4/IPv6 network. PostgreSQL is **opt-in per job**, not created by default. Dependency caches are **off by default**; opt-in persistent storage is described below.
 - A failed new runner or transient GitHub polling/acknowledgement failure does not tear down other jobs. Startup adopts existing live jobs before acquiring a GitHub session. Cleanup and lifetime checks operate independently of GitHub polling.
 - Idle, unassigned runners expire after `RUNNER_IDLE_TIMEOUT_SECONDS` (default **300**). All runners have an absolute creation-based lifetime of `RUNNER_MAX_LIFETIME_SECONDS` (default **3600**); controller restart does not reset it. The job-start hook prevents idle reclamation racing assignment; its job-writable marker is not a security credential.
 - Graceful stop stops scheduling and drains work until it exits or reaches its lifetime. Compose allows up to the configured lifetime for this drain. A hard controller crash preserves live job containers. Actual removal can be delayed by Docker unavailability; labeled cleanup state is retained for recovery.
-- Runner root filesystems are read-only. `/home/runner` uses a **2 GiB** per-job tmpfs and `/tmp` a **128 MiB** tmpfs. PostgreSQL data uses a **512 MiB** tmpfs. tmpfs consumes the container's memory budget; a job can fail on memory/workspace exhaustion rather than consume unbounded host disk.
-- Runner memory is limited to **1536 MiB**, PostgreSQL to **512 MiB**, proxy to **128 MiB**, and controller to **256 MiB**. Logs rotate at 2 × 5 MiB per container. Job resources are reclaimed after exit, completion or timeout, with failed cleanup retried.
+- Runner root filesystems are read-only. `/home/runner` uses a **2 GiB** per-job tmpfs and `/tmp` a **1 GiB** tmpfs, allowing larger Go build scratch directories without the previous 128 MiB filesystem ceiling. PostgreSQL data uses a **512 MiB** tmpfs. tmpfs consumes the container's memory budget; a job can fail on memory/workspace exhaustion rather than consume unbounded host disk.
+- Runner memory is limited to **4 GiB**, PostgreSQL to **512 MiB**, proxy to **128 MiB**, and controller to **256 MiB**. The two runner tmpfs limits are ceilings, not reserved or additive memory: their actual use competes with build processes under the same 4 GiB cap. Filling `/tmp` to 1 GiB leaves at most 3 GiB for workspace and processes; memory-heavy jobs can still OOM. With three database-enabled jobs the steady container-memory ceilings total **14464 MiB**, excluding transient firewall helpers and VM/daemon overhead. Logs rotate at 2 × 5 MiB per container. Job resources are reclaimed after exit, completion or timeout, with failed cleanup retried.
 - The pinned Go 1.26.3 and Node 24.14.0 toolchains are image-managed. Each job seeds private toolcache links to read-only image binaries; setup-go/setup-node can reuse these versions without downloading them. Other requested versions still require public network access.
 - Runner images default to `GOPROXY=https://goproxy.cn` with `GOSUMDB=sum.golang.org`; checksum verification remains enabled. Workflows can override these defaults. Set appropriate `GOPRIVATE`/`GONOPROXY`/`GONOSUMDB` before requesting private modules to avoid disclosing private module paths to public services. This setting affects Go modules only, not GitHub, Node or other traffic.
 - Immutable images remain in the Docker daemon until explicitly retired. Updates are cloud-built; no local build cache is needed. Review and remove exact unused CI image references when appropriate; there is no global pruning or cleanup of other deployments.
+
+## Optional dependency caches
+
+Keep `DEPENDENCY_CACHE_MODE=off` for public/fork fleets and mixed-event private
+fleets. To opt in, use a **separate audited manual-only deployment**:
+
+```dotenv
+RUNNER_ALLOWED_EVENTS=workflow_dispatch
+DEPENDENCY_CACHE_MODE=trusted-manual
+DEPENDENCY_CACHE_TRUST_LANE=reviewed-main
+```
+
+The trust lane must match `[a-z0-9][a-z0-9_-]{0,63}`. It is an operator assertion,
+not a ref filter. Only dispatch reviewed workflows/refs that execute trusted code
+in this fleet. Candidate refs need a separate deployment/lane; never change a
+live fleet's lane as a substitute for routing isolation. Manual dispatch can
+select arbitrary refs: if access/ref policy cannot enforce this condition, leave
+caching off. Enabling push, PR, PR-target or schedule alongside manual dispatch
+fails startup with caching enabled. The SDK cannot attest head/fork/actor trust,
+and capacity-based provisioning cannot bind a new runner to one queued request;
+there is no automatic per-event/ref trust partitioning.
+
+The controller creates one Docker-managed local named volume
+`ci-deps-linux-arm64-<sha256>` per exact repository URL, deployment ID, trust lane
+and `v1/linux-arm64/trusted-manual` schema. Labels use `ci-runner.cache-*`, never
+job/owner discovery labels. Existing foreign labels or driver options fail closed.
+No cache is created or mounted when disabled. Compose passes configuration only; the
+controller owns volume creation, so `compose down -v` does not manage these caches.
+
+| Persistent subdirectory | Job configuration |
+|---|---|
+| `npm` | Only `/home/runner/.npm/_cacache` links here; `npm_config_cache=/home/runner/.npm` |
+| `pip` | `PIP_CACHE_DIR=/opt/ci-cache/pip` (HTTP downloads and cached wheels) |
+| `gomod` | `GOMODCACHE=/opt/ci-cache/gomod` |
+| `go-build` | `GOCACHE=/opt/ci-cache/go-build` |
+
+The volume mounts at `/opt/ci-cache` with `nocopy`. HOME, workspaces, diagnostics,
+node_modules, npx installed tools, auth/config, databases and registration remain
+private/disposable. Image toolchains stay immutable; no shared installed toolchain
+or generic tool-archive cache is introduced. Do not place credentials in caches;
+private package/module contents themselves can be confidential.
+
+A network-disabled transient root helper opens fixed directories using
+no-follow descriptors and changes only their ownership/mode to UID/GID 1001 and
+0700. It never recursively chowns/chmods package contents. The existing transient
+helper slot is reused and reclaimed by job recovery. Jobs remain UID 1001 with
+no capabilities or Docker authority. Named volumes survive all job cleanup.
+Package managers retain their native content-addressing, lock and atomic-write
+behavior; sharing is limited to three trusted homogeneous writers. Offline reuse
+is package/lockfile dependent, not a guarantee that every install avoids network.
+
+**Storage policy:** new jobs fail cache initialization once regular-file logical
+size reaches **4 GiB** (120-second initialization budget); nothing is automatically
+deleted. This is an admission watermark, **not a hard quota**: active concurrent
+jobs can overshoot, physical/inode usage differs, and one job can grow arbitrarily.
+Before enabling, set an approved backing-store/VM capacity bound and monitor free
+space/inodes. If a strict per-volume quota is required, leave this feature off
+until that storage boundary exists; Docker local named volumes provide no quota.
+Drain the exact fleet before package-native maintenance or explicit removal of
+its inspected exact cache volume. Never global-prune, clean another lane, or
+remove cache contents under active jobs. Changing lanes leaves old volumes for
+explicit authorized retirement; cache disablement does not delete data.
+
+Adoption still requires independent review and actual Linux ARM64 cold/warm,
+offline, recreated-container and concurrent package-fixture acceptance. Source
+unit/HTTP fixture tests do not certify those runtime properties.
 
 ## Network and trust boundary
 
@@ -72,7 +138,7 @@ A short-lived NET_ADMIN helper installs namespace firewall rules and is removed 
 
 ## Optional PostgreSQL
 
-Run `ci-postgres` only in jobs that need a disposable database. In GitHub Actions it appends connection settings to `$GITHUB_ENV` for **subsequent steps**. For the current step use `ci-postgres <command> ...`, for example `ci-postgres psql -v ON_ERROR_STOP=1 -c 'SELECT 1'`. It does not print credentials or require `eval`.
+Run `ci-postgres` only in jobs that need a disposable database. In GitHub Actions it appends connection settings to `$GITHUB_ENV` for **subsequent steps**. For the current step use `ci-postgres <command> ...`, for example `ci-postgres psql -v ON_ERROR_STOP=1 -c 'SELECT 1'`. It emits only Actions `::add-mask::` commands for `PGPASSWORD` and the complete `DATABASE_URL` before opening `$GITHUB_ENV`, with percent/CR/LF workflow-command escaping. Outside Actions (no `$GITHUB_ENV`) it stays silent. Mask registration is not permission to print or upload connection files, and cannot redact secrets already logged before registration; avoid shell tracing and credential diagnostics. It does not require `eval`.
 
 The fixed per-job request creates at most one bounded PostgreSQL companion with a generated password; repeated requests reuse it. The controller waits for readiness outside the janitor, adds only this database's TCP/5432 namespace allowance, and publishes configuration atomically. It never accepts arbitrary images, Docker commands or another job's database through the request. Without a request there is no database container, database environment or TCP/5432 allowance. Cleanup includes requested databases. A controller restart conservatively preserves ambiguous job claims until the original hard lifetime.
 

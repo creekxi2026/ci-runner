@@ -182,8 +182,11 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 					t.Error("runner root filesystem is unbounded writable storage")
 				}
 				tmpfs, _ := v.HostConfig["Tmpfs"].(map[string]any)
-				if !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "size=2g") || !strings.Contains(fmt.Sprint(tmpfs["/tmp"]), "size=128m") || !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "rw,exec,") || !strings.Contains(fmt.Sprint(tmpfs["/tmp"]), "rw,exec,") {
-					t.Error("runner workspace/temp storage is not bounded")
+				if !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "size=2g") || fmt.Sprint(tmpfs["/tmp"]) != "rw,exec,size=1g,nr_inodes=32768,mode=1777" || !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "rw,exec,") {
+					t.Error("runner needs bounded 1 GiB executable temp storage with original inode/permission limits")
+				}
+				if v.HostConfig["Memory"].(float64) != 4*1024*1024*1024 {
+					t.Error("runner memory must remain bounded at the 4 GiB budget")
 				}
 			}
 			if v.Labels["ci-runner.owner"] != "unit" || v.Labels["ci-runner.job"] != jobName(name) {

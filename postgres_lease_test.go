@@ -46,7 +46,7 @@ func TestDatabasePrefixValidation(t *testing.T) {
 		}
 	}
 }
-func TestPairExportsThroughRealShellWithoutOutput(t *testing.T) {
+func TestPairExportsThroughRealShellWithActionsMasks(t *testing.T) {
 	dir := t.TempDir()
 	l := pairedLease("unit", "job", "closet_ai_test_", strings.Repeat("a", 48))
 	script := strings.ReplaceAll(publishLeaseScript, "/tmp/", dir+"/")
@@ -68,9 +68,15 @@ func TestPairExportsThroughRealShellWithoutOutput(t *testing.T) {
 	os.WriteFile(path, []byte(strings.ReplaceAll(string(helper), "/tmp/", dir+"/")), 0700)
 	gh := filepath.Join(dir, "github-env")
 	cmd = exec.Command("sh", path)
-	cmd.Env = append(os.Environ(), "GITHUB_ENV="+gh)
-	if out, err := cmd.CombinedOutput(); err != nil || len(out) > 0 {
-		t.Fatal("helper printed output or failed")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GITHUB_ENV=" + gh}
+	want := "::add-mask::" + l.password + "\n"
+	for _, entry := range l.env("172.20.0.4") {
+		if strings.HasPrefix(entry, "DATABASE_URL=") {
+			want += "::add-mask::" + strings.TrimPrefix(entry, "DATABASE_URL=") + "\n"
+		}
+	}
+	if out, err := cmd.CombinedOutput(); err != nil || string(out) != want {
+		t.Fatal("helper must emit exactly the paired lease Actions masks")
 	}
 	data, err := os.ReadFile(gh)
 	if err != nil {

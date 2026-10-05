@@ -19,6 +19,14 @@ NO_PROXY="${NO_PROXY:-localhost,127.0.0.1},$CI_DATABASE_HOST"
 export no_proxy NO_PROXY
 set +a
 if [ -n "${GITHUB_ENV:-}" ]; then
+ # Register masks before even opening GITHUB_ENV. Python is image-managed;
+ # read exported values, never pass credentials in process arguments.
+ python3 -c '
+import os
+for name in ("PGPASSWORD", "DATABASE_URL"):
+    value = os.environ[name].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print("::add-mask::" + value, flush=True)
+ '
  {
   printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
   printf 'CI_DATABASE_HOST=%s\n' "$CI_DATABASE_HOST"

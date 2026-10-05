@@ -72,6 +72,7 @@ type fleet struct {
 	proxyEnv                      []string
 	allowedEvents                 map[string]bool
 	databasePrefix                string
+	cache                         *dependencyCache
 	jobs                          map[string]string
 	scaleMu                       sync.Mutex
 	states                        map[string]*jobState
@@ -182,9 +183,13 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	proxyURL := "http://" + proxy + ":3128"
 	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1"}
 	h := secure()
-	h["Memory"] = 1536 * 1024 * 1024
+	h["Memory"] = 4 * 1024 * 1024 * 1024
 	h["ReadonlyRootfs"] = true
-	h["Tmpfs"] = obj{"/home/runner": "rw,exec,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700", "/tmp": "rw,exec,size=128m,nr_inodes=32768,mode=1777"}
+	h["Tmpfs"] = obj{"/home/runner": "rw,exec,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700", "/tmp": "rw,exec,size=1g,nr_inodes=32768,mode=1777"}
+	env, err = f.prepareDependencyCache(ctx, name, h, env)
+	if err != nil {
+		return err
+	}
 	if err = f.createContext(ctx, name, f.image, "1001", []string{"/opt/ci/runner.sh"}, env, h, network); err != nil {
 		return
 	}
@@ -312,6 +317,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	cache, err := dependencyCacheConfig(os.Getenv("DEPENDENCY_CACHE_MODE"), os.Getenv("DEPENDENCY_CACHE_TRUST_LANE"), os.Getenv("GITHUB_CONFIG_URL"), os.Getenv("DEPLOYMENT_ID"), events)
+	if err != nil {
+		return err
+	}
 	prefix := os.Getenv("POSTGRES_DATABASE_PREFIX")
 	if err := validateDatabasePrefix(prefix); err != nil {
 		return err
@@ -339,7 +348,7 @@ func run() error {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{cache: cache, client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}
