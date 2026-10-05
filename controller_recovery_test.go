@@ -214,7 +214,7 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if api.generated != 3 || len(f.jobs) != 3 || created != 12 {
+	if api.generated != 3 || len(f.jobs) != 3 || created != 9 {
 		t.Fatalf("overprovision: JIT=%d jobs=%d creates=%d", api.generated, len(f.jobs), created)
 	}
 	if err := f.start(context.Background()); err == nil {
@@ -369,7 +369,7 @@ func TestDrainIsBoundedDuringCleanupOutage(t *testing.T) {
 		t.Fatal("drain forgot recovery resources")
 	}
 }
-func TestJobStartedProtectsIdleButNotAbsoluteLifetime(t *testing.T) {
+func TestJobHookProtectsIdleButNotAbsoluteLifetime(t *testing.T) {
 	deletes := 0
 	withEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" {
@@ -377,10 +377,13 @@ func TestJobStartedProtectsIdleButNotAbsoluteLifetime(t *testing.T) {
 			w.WriteHeader(204)
 			return
 		}
-		if r.Method == "POST" {
-			t.Error("tried idle gate for known busy job")
+		if strings.HasSuffix(r.URL.Path, "/exec") {
+			io.WriteString(w, `{"Id":"hook-won"}`)
+		} else if strings.Contains(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/json") {
+			io.WriteString(w, `{"Running":false,"ExitCode":1}`)
+		} else {
+			io.WriteString(w, `{"State":{"Running":true}}`)
 		}
-		io.WriteString(w, `{"State":{"Running":true}}`)
 	})
 	f := &fleet{jobs: map[string]string{"busy": "net"}, idle: time.Second, lifetime: time.Hour}
 	j := f.state("busy")

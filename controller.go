@@ -169,18 +169,6 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	pg := secure()
-	pg["Tmpfs"] = obj{"/var/lib/postgresql/data": "rw,size=512m", "/var/run/postgresql": "rw,size=16m"}
-	pg["ReadonlyRootfs"] = true
-	pg["Memory"] = 512 * 1024 * 1024
-	pg["NanoCpus"] = int64(500000000)
-	if err = f.createContext(ctx, name+"-pg", f.postgresImage(), "999", []string{"postgres"}, []string{"POSTGRES_PASSWORD=ci-disposable", "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}, pg, network); err != nil {
-		return
-	}
-	database, err := f.address(ctx, name+"-pg", network)
-	if err != nil {
-		return err
-	}
 	api, set := f.api()
 	if api == nil {
 		return fmt.Errorf("runner API unavailable")
@@ -190,7 +178,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 		return err
 	}
 	proxyURL := "http://" + proxy + ":3128"
-	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1," + database, "NO_PROXY=localhost,127.0.0.1," + database, "DATABASE_URL=postgres://postgres:ci-disposable@" + database + ":5432/ci?sslmode=disable", "CI_DATABASE_HOST=" + database}
+	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1"}
 	h := secure()
 	h["Memory"] = 1536 * 1024 * 1024
 	h["ReadonlyRootfs"] = true
@@ -201,7 +189,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	fw := secure()
 	fw["CapAdd"] = []string{"NET_ADMIN"}
 	fw["ReadonlyRootfs"] = true
-	if err = f.createContext(ctx, name+"-fw", f.image, "0", []string{"/opt/ci/firewall.sh", proxy, database}, nil, fw, "container:"+name); err != nil {
+	if err = f.createContext(ctx, name+"-fw", f.image, "0", []string{"/opt/ci/firewall.sh", proxy}, nil, fw, "container:"+name); err != nil {
 		return
 	}
 	var result struct{ StatusCode int }
@@ -263,17 +251,8 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 		}
 		p.acquired = true
 	}
-	for _, event := range msg.JobStartedMessages {
-		if _, ok := f.snapshot()[event.RunnerName]; ok {
-			j := f.state(event.RunnerName)
-			if j == nil {
-				continue
-			}
-			j.mu.Lock()
-			j.busy = true
-			j.mu.Unlock()
-		}
-	}
+	// JobStarted is scheduler assignment, not proof that an offline listener
+	// has run user code. Only the atomic job-start hook arbitrates idle cleanup.
 	for _, event := range msg.JobCompletedMessages {
 		if n, ok := f.snapshot()[event.RunnerName]; ok {
 			f.cleanup(event.RunnerName, n)
@@ -345,6 +324,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	dohEnv, err := dohProxyEnv(os.Getenv("PUBLIC_EGRESS_DOH_URL"))
+	if err != nil {
+		return err
+	}
+	proxyEnv = append(proxyEnv, dohEnv...)
 	f := &fleet{client: c, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")

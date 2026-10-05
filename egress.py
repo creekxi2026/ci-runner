@@ -1,5 +1,50 @@
 """Public-only HTTP/CONNECT proxy. Resolve once, validate all, dial pinned IP."""
-import ipaddress, socket, socketserver, select, urllib.parse, os, time
+import ipaddress, socket, socketserver, select, urllib.parse, urllib.request, json, os, time
+
+
+class NoResolverRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        return None
+
+
+def resolve(host, port):
+    endpoint = os.environ.get('PUBLIC_EGRESS_DOH_URL', '')
+    if not endpoint:
+        return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    u = urllib.parse.urlsplit(endpoint)
+    if u.scheme != 'https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.port not in (None, 443):
+        raise ValueError('invalid HTTPS DNS resolver')
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        family = socket.AF_INET if literal.version == 4 else socket.AF_INET6
+        address = (str(literal), port) if literal.version == 4 else (str(literal), port, 0, 0)
+        return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', address)]
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoResolverRedirect())
+    answers = []
+    for kind, family in ((1, socket.AF_INET), (28, socket.AF_INET6)):
+        query = urllib.parse.urlencode({'name': host, 'type': kind})
+        request = urllib.request.Request(endpoint + '?' + query, headers={'Accept': 'application/dns-json'})
+        with opener.open(request, timeout=10) as response:
+            body = response.read(65537)
+        if len(body) > 65536:
+            raise ValueError('DNS response too large')
+        data = json.loads(body)
+        if not isinstance(data, dict) or data.get('Status') != 0 or not isinstance(data.get('Answer', []), list):
+            raise OSError('HTTPS DNS lookup failed')
+        for answer in data.get('Answer', []):
+            if not isinstance(answer, dict):
+                raise ValueError('invalid DNS answer')
+            if answer.get('type') != kind:
+                continue
+            ip = ipaddress.ip_address(answer.get('data', ''))
+            if ip.version != (4 if kind == 1 else 6):
+                raise ValueError('invalid DNS address family')
+            address = (str(ip), port) if kind == 1 else (str(ip), port, 0, 0)
+            answers.append((family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', address))
+    return answers
 
 def upstream_tunnel(address, value):
     u = urllib.parse.urlsplit(value)
@@ -46,7 +91,7 @@ def public(value):
 def connect(host, port):
     if port not in (80, 443):
         raise ValueError('port denied')
-    answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    answers = resolve(host, port)
     if not answers or any(not public(a[4][0]) for a in answers):
         raise ValueError('destination denied')
     upstream = os.environ.get('PUBLIC_EGRESS_UPSTREAM_PROXY', '')

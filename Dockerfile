@@ -39,7 +39,9 @@ COPY --from=build /usr/local/go /opt/go
 ENV PATH="/opt/go/bin:${PATH}"
 ENV GOPROXY=https://goproxy.cn GOSUMDB=sum.golang.org
 COPY egress.py firewall.sh runner.sh toolcache-init.sh /opt/ci/
+COPY ci-postgres.sh /usr/local/bin/ci-postgres
 RUN chmod 755 /opt/ci/*.sh
+RUN chmod 755 /usr/local/bin/ci-postgres
 WORKDIR /home/runner
 USER runner
 CMD ["/opt/ci/runner.sh"]

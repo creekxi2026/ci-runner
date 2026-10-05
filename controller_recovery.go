@@ -26,7 +26,9 @@ type jobState struct {
 	busy, cleaning, provisioning bool
 	resources                    []string
 	recovered                    bool
+	databaseReady                bool
 	gate                         bool
+	idleExec                     string // retained across ambiguous start/inspect responses
 }
 type messageProgress struct {
 	acquired, done bool
@@ -174,21 +176,32 @@ func (f *fleet) reap() {
 // must fail before user steps run. A job can forge/claim this path, so it only
 // postpones idle cleanup; it never extends the controller's absolute lifetime.
 func (f *fleet) claimIdle(n string) bool {
-	var exec struct{ ID string }
-	if docker("POST", "/containers/"+n+"/exec", obj{"User": "1001", "Cmd": []string{"mkdir", "/tmp/ci-job-claimed"}}, &exec) != nil || exec.ID == "" {
+	j := f.state(n) // caller holds the job mutex
+	if j == nil {
 		return false
 	}
-	if docker("POST", "/exec/"+exec.ID+"/start", obj{"Detach": false, "Tty": false}, nil) != nil {
-		return false
+	if j.idleExec == "" {
+		var exec struct{ ID string }
+		if docker("POST", "/containers/"+n+"/exec", obj{"User": "1001", "Cmd": []string{"mkdir", "/tmp/ci-job-claimed"}}, &exec) != nil || exec.ID == "" {
+			return false
+		}
+		j.idleExec = exec.ID
+		// Even a lost start response can have won the atomic gate. Inspect this
+		// same exec on every reap; a second mkdir would lose to our own claim.
+		_ = docker("POST", "/exec/"+j.idleExec+"/start", obj{"Detach": false, "Tty": false}, nil)
 	}
 	var result struct {
 		Running  bool
-		ExitCode int
+		ExitCode *int
 	}
-	if docker("GET", "/exec/"+exec.ID+"/json", nil, &result) != nil {
+	if docker("GET", "/exec/"+j.idleExec+"/json", nil, &result) != nil {
 		return false
 	}
-	return !result.Running && result.ExitCode == 0
+	if !result.Running && result.ExitCode == nil {
+		// Docker reports null before execution. A failed start may not have run.
+		_ = docker("POST", "/exec/"+j.idleExec+"/start", obj{"Detach": false, "Tty": false}, nil)
+	}
+	return !result.Running && result.ExitCode != nil && *result.ExitCode == 0
 }
 func (f *fleet) limits() (time.Duration, time.Duration) {
 	idle, life := f.idle, f.lifetime
@@ -301,8 +314,15 @@ func (f *fleet) recover() error {
 	return nil
 }
 func (f *fleet) maintain(ctx context.Context, interval time.Duration) {
+	workers, cancel := context.WithCancel(ctx)
+	var pending sync.WaitGroup
+	defer func() { cancel(); pending.Wait() }()
 	for {
 		f.reap()
+		for n, network := range f.snapshot() {
+			pending.Add(1)
+			go func() { defer pending.Done(); f.provisionDatabaseContext(workers, n, network) }()
+		}
 		if !pause(ctx, interval) {
 			return
 		}

@@ -11,5 +11,7 @@ for cmd in iptables ip6tables; do
  "$cmd" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 done
 iptables -A OUTPUT -d "$1" -p tcp --dport 3128 -j ACCEPT
-iptables -A OUTPUT -d "$2" -p tcp --dport 5432 -j ACCEPT
+if [ -n "${2:-}" ]; then
+ iptables -A OUTPUT -d "$2" -p tcp --dport 5432 -j ACCEPT
+fi
 # Job has no CAP_NET_ADMIN; helper exits before runner registration.

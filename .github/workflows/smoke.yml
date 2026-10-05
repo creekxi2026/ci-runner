@@ -32,9 +32,21 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.14.0'
-      - name: Prove tools, public internet and per-job PostgreSQL
+      - name: Verify database is absent by default
+        run: |
+          test -z "${DATABASE_URL:-}"
+          test -z "${CI_DATABASE_HOST:-}"
+          test ! -e /tmp/ci-postgres.env
+      - name: Request this job's PostgreSQL
+        if: matrix.slot == 2 || matrix.slot == 4
+        run: ci-postgres
+      - name: Repeat database request without creating a second database
+        if: matrix.slot == 2 || matrix.slot == 4
+        run: ci-postgres sh -ec 'test -n "$DATABASE_URL"; pg_isready -h "$CI_DATABASE_HOST" -U postgres'
+      - name: Prove tools, public internet and optional PostgreSQL
         env:
           HOLD_SECONDS: ${{ inputs.hold_seconds }}
+          REQUEST_DATABASE: ${{ matrix.slot == 2 || matrix.slot == 4 }}
         run: |
           set -euo pipefail
           [[ "$HOLD_SECONDS" =~ ^[0-9]{1,3}$ ]] && (( 10#$HOLD_SECONDS <= 300 ))
@@ -45,12 +57,19 @@ jobs:
           go version; go env GOPROXY GOSUMDB; go test ./...
           python3 -m unittest discover -s tests -v
           curl -fsS --max-time 30 https://api.github.com/zen
-          for i in $(seq 1 30); do pg_isready -h "$CI_DATABASE_HOST" -U postgres && break; sleep 1; done
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE TABLE isolated (n int); INSERT INTO isolated VALUES (1); SELECT * FROM isolated;'
+          if [ "$REQUEST_DATABASE" = true ]; then
+            pg_isready -h "$CI_DATABASE_HOST" -U postgres
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE TABLE isolated (n int); INSERT INTO isolated VALUES (1); SELECT * FROM isolated;'
+          else
+            test -z "${DATABASE_URL:-}"
+            test ! -e /tmp/ci-postgres.env
+          fi
           python3 scripts/network_probe.py
           printf 'RECOVERY_HOLD_START runner=%s\n' "$RUNNER_NAME"
           sleep "$HOLD_SECONDS"
-          test "$(psql "$DATABASE_URL" -Atc 'SELECT count(*) FROM isolated')" = 1
+          if [ "$REQUEST_DATABASE" = true ]; then
+            test "$(psql "$DATABASE_URL" -Atc 'SELECT count(*) FROM isolated')" = 1
+          fi
       - name: Deliberate failed-job cleanup exercise
         if: inputs.fail_slot4 && matrix.slot == 4
         run: exit 17

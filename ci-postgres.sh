@@ -1,0 +1,34 @@
+#!/bin/sh
+# Request only this job's disposable database; never print connection secrets.
+set -eu
+umask 077
+: > /tmp/ci-postgres-request
+n=0
+while [ ! -f /tmp/ci-postgres.env ]; do
+ n=$((n+1))
+ if [ "$n" -ge 60 ]; then
+  printf '%s\n' 'ci-postgres: database request timed out' >&2
+  exit 1
+ fi
+ sleep 1
+done
+set -a
+. /tmp/ci-postgres.env
+no_proxy="${no_proxy:-localhost,127.0.0.1},$CI_DATABASE_HOST"
+NO_PROXY="${NO_PROXY:-localhost,127.0.0.1},$CI_DATABASE_HOST"
+export no_proxy NO_PROXY
+set +a
+if [ -n "${GITHUB_ENV:-}" ]; then
+ {
+  printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
+  printf 'CI_DATABASE_HOST=%s\n' "$CI_DATABASE_HOST"
+  printf 'PGHOST=%s\n' "${PGHOST:-$CI_DATABASE_HOST}"
+  printf 'PGPORT=%s\n' "${PGPORT:-5432}"
+  printf 'PGDATABASE=%s\n' "${PGDATABASE:-ci}"
+  printf 'PGUSER=%s\n' "${PGUSER:-postgres}"
+  printf 'PGPASSWORD=%s\n' "$PGPASSWORD"
+  printf 'no_proxy=%s\nNO_PROXY=%s\n' "$no_proxy" "$NO_PROXY"
+ } >> "$GITHUB_ENV"
+fi
+# Optional command gets the environment in the current step, without eval/output.
+if [ "$#" -gt 0 ]; then exec "$@"; fi
