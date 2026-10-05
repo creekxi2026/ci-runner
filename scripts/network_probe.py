@@ -9,14 +9,25 @@ for host in hosts:
    s=socket.create_connection((host,port),timeout=1);s.close()
   except (OSError, socket.gaierror):print('DIRECT BLOCKED',host,port)
   else:raise SystemExit('DIRECT BYPASS '+host+':'+str(port))
+# These are explicit proxy tests, including loopback; NO_PROXY must not bypass them.
+os.environ['no_proxy'] = os.environ['NO_PROXY'] = ''
+host_aliases = {'host.docker.internal', 'host.orb.internal'}
 proxy=urllib.request.ProxyHandler({'http':os.environ['http_proxy'],'https':os.environ['https_proxy']})
 opener=urllib.request.build_opener(proxy)
 for host in ['127.0.0.1','192.168.1.1','169.254.169.254','[::1]','host.docker.internal','host.orb.internal']:
  try:
   with opener.open('http://'+host+'/',timeout=5) as r:raise SystemExit('PROXY BYPASS '+host)
  except urllib.error.HTTPError as e:
-  assert e.code==403,(host,e.code);print('PROXY DENIED',host)
+  try:
+   if host in host_aliases and e.code == 502:
+    # Public DoH cannot resolve host-local names. This is NOT policy proof;
+    # numeric private destinations above must still receive an explicit 403.
+    print('PROXY HOSTNAME UNREACHABLE',host)
+   else:
+    assert e.code==403,(host,e.code);print('PROXY DENIED',host)
+  finally:
+   e.close()
  except urllib.error.URLError as e:
-  # An unresolved special hostname isn't proof of policy; literals above are.
-  print('PROXY CONNECTION BLOCKED',host,str(e.reason))
+  assert host in host_aliases, ('missing proxy policy response', host)
+  print('PROXY HOSTNAME UNREACHABLE',host)
 print('network isolation probes passed')
