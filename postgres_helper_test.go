@@ -25,7 +25,9 @@ func TestPostgresHelperDoesNotPrintSecretsAndPropagatesEnv(t *testing.T) {
 	}
 	gh := filepath.Join(dir, "github-env")
 	cmd := exec.Command("sh", helper)
-	cmd.Env = append(os.Environ(), "GITHUB_ENV="+gh)
+	// Keep the fixture independent from an actual CI job's existing database
+	// bypass addresses while exercising propagation of both proxy spellings.
+	cmd.Env = append(os.Environ(), "GITHUB_ENV="+gh, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helper: %s %v", out, err)
