@@ -27,7 +27,7 @@ func dependencyCacheConfig(mode, lane, repository, owner string, events map[stri
 	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !regexp.MustCompile(`^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(u.Path) {
 		return nil, fmt.Errorf("dependency cache requires exact GitHub repository URL")
 	}
-	volume := "ci-deps-linux-arm64"
+	volume := "ci-deps-linux-arm64-cache"
 	if len(names) > 0 && names[0] != "" {
 		volume = names[0]
 	}

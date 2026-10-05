@@ -54,7 +54,7 @@ fleets. To opt in, use a **separate audited manual-only deployment**:
 RUNNER_ALLOWED_EVENTS=workflow_dispatch
 DEPENDENCY_CACHE_MODE=trusted-manual
 DEPENDENCY_CACHE_TRUST_LANE=reviewed-main
-DEPENDENCY_CACHE_VOLUME=ci-deps-linux-arm64
+DEPENDENCY_CACHE_VOLUME=ci-deps-linux-arm64-cache
 ```
 
 The trust lane must match `[a-z0-9][a-z0-9_-]{0,63}`. It is an operator assertion,
@@ -68,7 +68,7 @@ and capacity-based provisioning cannot bind a new runner to one queued request;
 there is no automatic per-event/ref trust partitioning.
 
 The controller creates or adopts the readable named volume
-`ci-deps-linux-arm64` (`DEPENDENCY_CACHE_VOLUME` can select another readable name).
+`ci-deps-linux-arm64-cache` (`DEPENDENCY_CACHE_VOLUME` can select another readable name).
 Deployment, exact repository and trust lane remain in strict `ci-runner.cache-*`
 labels under the `v2-linux-arm64-trusted-manual` schema. They are not discarded
 when the name loses its hash. Reusing a name with foreign labels fails closed;

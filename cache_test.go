@@ -170,13 +170,13 @@ func TestCacheOptInAndTrustBoundary(t *testing.T) {
 
 func TestCacheExplicitReadableName(t *testing.T) {
 	events, _ := allowedEvents("workflow_dispatch")
-	for _, name := range []string{"", "ci-deps-linux-arm64", "ci-deps-linux-arm64-secondary"} {
+	for _, name := range []string{"", "ci-deps-linux-arm64-cache", "ci-deps-linux-arm64-cache-secondary"} {
 		c, err := dependencyCacheConfig("trusted-manual", "main", "https://github.com/acme/repo", "private", events, name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if name == "" {
-			name = "ci-deps-linux-arm64"
+			name = "ci-deps-linux-arm64-cache"
 		}
 		if c.volume != name {
 			t.Fatal(c.volume)

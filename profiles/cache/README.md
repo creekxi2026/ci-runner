@@ -1,7 +1,8 @@
 # CI runner cache
 
-A persistent cache for trusted CI jobs. The volume is named `ci-deps-linux-arm64`;
-there is no application, machine-local, issue or version suffix in its name.
+A persistent cache for trusted CI jobs. The volume is named `ci-deps-linux-arm64-cache`;
+the `-cache` suffix identifies reconstructable data. It has no application,
+machine-local, issue or version in its name.
 The schema/owner/repository/trust-lane labels match the controller's contract.
 Initialize with the controller's exact configuration values; an existing volume
 with different labels is rejected. Source code, controller jobs and this profile
@@ -92,6 +93,14 @@ neither publishes an image nor switches them. Keep their old volume while they
 reference it. Prewarmed standalone data can be migrated to the unified volume,
 verified, then its redundant standalone volume retired. Do not retire a live
 controller's volume as part of standalone cleanup. Mixed-event cache stays off.
+
+Existing deployments with an explicit `DEPENDENCY_CACHE_VOLUME` keep that name.
+To rename a warmed v2 volume, stop admission and drain its jobs, import and verify
+its data with the helper above, preserve any operator recovery archive separately,
+then set both volume settings to the new name. Verify a fresh job uses the new
+volume before retiring the unreferenced source. A suffix change alone does not
+migrate data. Removing caches requires downloads, tool preparation and compilation
+again; `-cache` is not permission to remove a volume used by running jobs.
 
 Cache size is not a hard quota. Keep one persistent copy for this trust domain,
 measure growth, and prune package-manager-owned caches in an idle maintenance

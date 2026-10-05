@@ -1,5 +1,5 @@
 # Shared cache for trusted CI jobs; no GitHub registration or pool changes.
-name: ci-deps-linux-arm64
+name: ci-deps-linux-arm64-cache
 services:
   verify:
     image: ghcr.io/creekxi2026/ci-runner-runner@sha256:fd006fc20579487c9f23bf248f97e8c9ce3e49bf31a6387cb40507391dfd4f9f
@@ -41,4 +41,4 @@ services:
 volumes:
   cache:
     external: true
-    name: ${CI_RUNNER_CACHE_VOLUME:-ci-deps-linux-arm64}
+    name: ${CI_RUNNER_CACHE_VOLUME:-ci-deps-linux-arm64-cache}

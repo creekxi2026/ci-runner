@@ -63,7 +63,7 @@ def ensure_volume(args):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--volume', default='ci-deps-linux-arm64')
+    p.add_argument('--volume', default='ci-deps-linux-arm64-cache')
     p.add_argument('--owner', required=True, help='Controller DEPLOYMENT_ID')
     p.add_argument('--repository', required=True, help='Controller GITHUB_CONFIG_URL')
     p.add_argument('--lane', required=True, help='Controller DEPENDENCY_CACHE_TRUST_LANE')
