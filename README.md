@@ -2,7 +2,7 @@
 
 On-demand Linux ARM64 GitHub Actions runners for Docker/OrbStack, using the official non-Kubernetes [scale-set client](https://github.com/actions/scaleset) (public preview).
 
-This is a **trusted, manually dispatched test fleet**. It does not migrate product workflows or acquire public fork, PR, push or workflow-run events. Production adoption requires independent audit and explicit cutover authorization.
+The default is a **trusted, manually dispatched test fleet**. Other trusted private fleets can explicitly opt into supported events; defaults and the public smoke workflow remain manual-only. Production adoption requires independent audit and explicit cutover authorization.
 
 ## Quick start
 
@@ -47,6 +47,21 @@ Registry multi-tag publication is **not atomic**: a failed promotion can leave a
 
 ## Network and trust boundary
 
+`RUNNER_ALLOWED_EVENTS` is a comma-separated explicit allowlist. Empty/unset means
+`workflow_dispatch` only. Supported names are `workflow_dispatch`, `push`,
+`pull_request`, `pull_request_target`, and `schedule`; unknown names, empty list
+elements and wildcards fail startup closed. A trusted private fleet can set
+`push,pull_request,pull_request_target,schedule,workflow_dispatch` without widening
+any existing public fleet. Capacity remains three regardless of event selection.
+
+This allowlist is **not source/fork attestation**. The pinned scale-set SDK supplies
+owner/repository, workflow reference, run ID and event name, but no fork/head
+repository or actor trust/approval metadata. Do not enable PR events for untrusted
+workloads on that basis. Repository-level registration plus privately controlled
+workflow/ref/actor policy must be independently audited before cutover, especially
+for `pull_request_target` workflows that check out or execute PR-controlled code.
+No additional source trust is inferred or invented by the controller.
+
 Set `PUBLIC_EGRESS_DOH_URL=https://dns.alidns.com/resolve` in the deployment `.env` to use a trusted HTTPS JSON DNS resolver inside the per-job public gateway. This does not modify Mac/OrbStack/system DNS or give the workload direct DNS access. TLS verification stays enabled; all returned IPv4/IPv6 addresses must still be public, and failed HTTPS DNS does not fall back to synthetic system answers. This resolver handles workload destinations, not the controller's own GitHub API DNS. Leave it empty to retain ordinary DNS.
 
 Job INPUT/OUTPUT are deny-by-default. Outbound traffic is limited to the job's HTTP/CONNECT proxy (public TCP/80 and TCP/443 only) and its PostgreSQL TCP/5432. The proxy checks every DNS answer, rejects nonpublic addresses, and dials a verified numeric address without resolving again. SSH, UDP and arbitrary external database access are unavailable.
@@ -60,6 +75,38 @@ A short-lived NET_ADMIN helper installs namespace firewall rules and is removed 
 Run `ci-postgres` only in jobs that need a disposable database. In GitHub Actions it appends connection settings to `$GITHUB_ENV` for **subsequent steps**. For the current step use `ci-postgres <command> ...`, for example `ci-postgres psql -v ON_ERROR_STOP=1 -c 'SELECT 1'`. It does not print credentials or require `eval`.
 
 The fixed per-job request creates at most one bounded PostgreSQL companion with a generated password; repeated requests reuse it. The controller waits for readiness outside the janitor, adds only this database's TCP/5432 namespace allowance, and publishes configuration atomically. It never accepts arbitrary images, Docker commands or another job's database through the request. Without a request there is no database container, database environment or TCP/5432 allowance. Cleanup includes requested databases. A controller restart conservatively preserves ambiguous job claims until the original hard lifetime.
+
+`POSTGRES_DATABASE_PREFIX` defaults to empty, preserving the generic `ci` database
+and bootstrap-role behavior. A non-empty operator prefix enables a trusted
+controller-provisioned **pair**: `<prefix><24 lowercase hex>` and that primary name
+plus `_staging`, both owned by the same non-admin login role (`NOSUPERUSER`,
+`NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`, no role memberships).
+Prefixes must start with a lowercase letter, contain only lowercase letters,
+digits or underscores, end in underscore and be at most 31 bytes, keeping both
+database identifiers within PostgreSQL's 63-byte limit. A private application
+fleet may configure `closet_ai_test_`; no application scripts are baked into images.
+
+Names derive from the deployment/job identity; the login password derives with
+HMAC from bootstrap state preserved privately in the owned disposable cluster.
+Retries and controller recovery reuse the same pair/password. Changed prefixes,
+foreign container ownership, partial pairs, inconsistent ownership or elevated
+role privileges fail closed without publishing worker configuration or silently
+repairing state. Failed partial creation requires disposal of the job/cluster,
+not manual repair inside a running job. Do not change lease mode/prefix while jobs
+are active. Cluster data is disposable, not a persistent recovery database.
+
+With a configured prefix workers receive **only the non-admin** credentials:
+`CI_DATABASE_NAME`, `CI_DATABASE_COMPANION_NAME`, `DATABASE_URL`,
+`CI_DATABASE_HOST`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`.
+Both databases are verified using that login before publishing the mode-0600
+environment file atomically. Secrets use scoped Docker exec environment and SQL
+stdin, never process argv or stdout/logs. The privileged provisioning session
+also disables PostgreSQL statement/error/duration logging so rejected ownership
+or privilege checks cannot leak password-bearing SQL into server logs.
+`$GITHUB_ENV` exports are whitelisted;
+connection settings are secret-bearing files and must not be printed/uploaded.
+All provisioning/verification/publication shares the existing 45-second readiness
+budget and immutable job lifetime; the janitor never waits on SQL readiness.
 
 ## Updates and development
 

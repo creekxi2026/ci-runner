@@ -22,6 +22,8 @@ if [ -n "${GITHUB_ENV:-}" ]; then
  {
   printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
   printf 'CI_DATABASE_HOST=%s\n' "$CI_DATABASE_HOST"
+  printf 'CI_DATABASE_NAME=%s\n' "${CI_DATABASE_NAME:-${PGDATABASE:-ci}}"
+  printf 'CI_DATABASE_COMPANION_NAME=%s\n' "${CI_DATABASE_COMPANION_NAME:-}"
   printf 'PGHOST=%s\n' "${PGHOST:-$CI_DATABASE_HOST}"
   printf 'PGPORT=%s\n' "${PGPORT:-5432}"
   printf 'PGDATABASE=%s\n' "${PGDATABASE:-ci}"

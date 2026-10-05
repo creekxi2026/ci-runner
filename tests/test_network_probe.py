@@ -24,7 +24,7 @@ class NetworkProbe(unittest.TestCase):
                     raise code
                 if code == 200:
                     return contextlib.nullcontext()
-                raise urllib.error.HTTPError(url, code, 'fixture', {}, None)
+                raise urllib.error.HTTPError(url, code, 'fixture', {}, io.BytesIO())
         output = io.StringIO()
         with patch.dict(os.environ, {'http_proxy': 'http://proxy.example:3128', 'https_proxy': 'http://proxy.example:3128', 'no_proxy': '127.0.0.1', 'NO_PROXY': '127.0.0.1'}), patch('socket.create_connection', side_effect=OSError('blocked')), patch('urllib.request.build_opener', return_value=Opener()), contextlib.redirect_stdout(output):
             runpy.run_path(str(PROBE), run_name='__main__')

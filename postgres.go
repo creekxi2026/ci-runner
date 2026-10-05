@@ -13,8 +13,11 @@ import (
 
 // execCode never infers completion from a lost start response.
 func execCode(ctx context.Context, n, user string, cmd []string) (int, error) {
+	return execCodeEnv(ctx, n, user, cmd, nil)
+}
+func execCodeEnv(ctx context.Context, n, user string, cmd, env []string) (int, error) {
 	var ex struct{ ID string }
-	if err := dockerContext(ctx, "POST", "/containers/"+n+"/exec", obj{"User": user, "Cmd": cmd}, &ex); err != nil {
+	if err := dockerContext(ctx, "POST", "/containers/"+n+"/exec", obj{"User": user, "Cmd": cmd, "Env": env}, &ex); err != nil {
 		return -1, err
 	}
 	if ex.ID == "" {
@@ -92,7 +95,11 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 		if j.recovered {
 			j.resources = appendUnique(j.resources, n+"-pg", n+"-fw")
 		}
-		if f.createContext(ctx, n+"-pg", f.postgresImage(), "999", []string{"postgres"}, []string{"POSTGRES_PASSWORD=" + password, "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}, h, network) != nil {
+		pgEnv := []string{"POSTGRES_PASSWORD=" + password, "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}
+		if f.databasePrefix != "" {
+			pgEnv = append(pgEnv, "CI_DATABASE_PREFIX="+f.databasePrefix)
+		}
+		if f.createContext(ctx, n+"-pg", f.postgresImage(), "999", []string{"postgres"}, pgEnv, h, network) != nil {
 			return
 		}
 	} else if err != nil {
@@ -105,6 +112,15 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 			if strings.HasPrefix(e, "POSTGRES_PASSWORD=") {
 				password = strings.TrimPrefix(e, "POSTGRES_PASSWORD=")
 			}
+		}
+		storedPrefix := ""
+		for _, e := range pg.Config.Env {
+			if strings.HasPrefix(e, "CI_DATABASE_PREFIX=") {
+				storedPrefix = strings.TrimPrefix(e, "CI_DATABASE_PREFIX=")
+			}
+		}
+		if storedPrefix != f.databasePrefix {
+			return
 		}
 		if len(password) != 48 {
 			return
@@ -133,6 +149,13 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 			return
 		}
 	}
+	var lease databaseLease
+	if f.databasePrefix != "" {
+		lease = pairedLease(f.owner, n, f.databasePrefix, password)
+		if !provisionLease(ctx, n, lease, database) {
+			return
+		}
+	}
 	// Reuse the fixed owned helper name; remove remnants of a interrupted setup.
 	if dockerContext(ctx, "DELETE", "/containers/"+n+"-fw?force=true", nil, nil) != nil {
 		return
@@ -150,10 +173,10 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 	if dockerContext(ctx, "DELETE", "/containers/"+n+"-fw?force=true", nil, nil) != nil {
 		return
 	}
-	// All interpolated data comes from generated hex and Docker IPs, not the job.
-	content := fmt.Sprintf("DATABASE_URL='postgres://postgres:%s@%s/ci?sslmode=disable'\nCI_DATABASE_HOST='%s'\nPGHOST='%s'\nPGPORT=5432\nPGDATABASE=ci\nPGUSER=postgres\nPGPASSWORD='%s'\n", password, net.JoinHostPort(database, "5432"), database, database, password)
-	script := "umask 077; printf '%s' '" + strings.ReplaceAll(content, "'", "'\\''") + "' > /tmp/ci-postgres.env.new && mv /tmp/ci-postgres.env.new /tmp/ci-postgres.env"
-	code, err = execCode(ctx, n, "1001", []string{"sh", "-c", script})
+	if f.databasePrefix == "" {
+		lease = databaseLease{"ci", "", "postgres", password}
+	}
+	code, err = execCodeEnv(ctx, n, "1001", []string{"sh", "-c", publishLeaseScript}, lease.env(database))
 	if err == nil && code == 0 {
 		j.databaseReady = true
 	}

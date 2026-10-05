@@ -26,7 +26,7 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sourc
  'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261004T000000Z/ noble main universe' \
  'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261004T000000Z/ noble-updates main universe' \
  'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261004T000000Z/ noble-security main universe' > /etc/apt/sources.list \
- && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq python3 python3-venv python3-pip postgresql-client iptables libicu74 libssl3t64 libkrb5-3 zlib1g build-essential gh && rm -rf /var/lib/apt/lists/* \
+ && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq python3 python3-venv python3-pip postgresql-client iptables libicu74 libssl3t64 libkrb5-3 zlib1g build-essential gh rsync && rm -rf /var/lib/apt/lists/* \
  && useradd -m -u 1001 -s /bin/bash runner
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules

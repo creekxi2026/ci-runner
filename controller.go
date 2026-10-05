@@ -70,6 +70,8 @@ type fleet struct {
 	set                           int
 	image, pgImage, netout, owner string
 	proxyEnv                      []string
+	allowedEvents                 map[string]bool
+	databasePrefix                string
 	jobs                          map[string]string
 	scaleMu                       sync.Mutex
 	states                        map[string]*jobState
@@ -240,7 +242,7 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	if !p.acquired {
 		var ids []int64
 		for _, j := range msg.JobAvailableMessages {
-			if j.EventName == "workflow_dispatch" {
+			if j != nil && f.admits(j.EventName) {
 				ids = append(ids, j.RunnerRequestID)
 			}
 		}
@@ -306,6 +308,14 @@ func ensureScaleSet(ctx context.Context, c scaleSets, name string) (*scaleset.Ru
 }
 
 func run() error {
+	events, err := allowedEvents(os.Getenv("RUNNER_ALLOWED_EVENTS"))
+	if err != nil {
+		return err
+	}
+	prefix := os.Getenv("POSTGRES_DATABASE_PREFIX")
+	if err := validateDatabasePrefix(prefix); err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	token, err := os.ReadFile("/run/secrets/github_token")
@@ -329,7 +339,7 @@ func run() error {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{client: c, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}
