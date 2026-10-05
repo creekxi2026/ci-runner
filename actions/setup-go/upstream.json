@@ -1,0 +1,10 @@
+{
+  "repository": "actions/setup-go",
+  "revision": "924ae3a1cded613372ab5595356fb5720e22ba16",
+  "files": {
+    "action.yml": "cbfae748992b96b9a1bfa3f1679d17c898c78375aad8a0d0184820683c82c482",
+    "LICENSE": "7d070f6b64d9bcc530fe99cc21eaaa4b3c364e0b2d367d7735671fa202a03b32",
+    "dist/setup/index.js": "3f7ace6a19e6675a05a47c9b953ca0a20e3c468fe6078f3f7ee5f9190422dc76",
+    "dist/cache-save/index.js": "6da5233fed11b1b32eece03add37d1abdf8c64233907bae23e71196c7dfe8ae0"
+  }
+}

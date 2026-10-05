@@ -59,6 +59,9 @@ func TestSharedWorkRuntime(t *testing.T) {
 		if e := f.prepareJobDisk(ctx, n, h); e != nil {
 			t.Fatal(e)
 		}
+		if e := f.prepareWorkspace(ctx, n); e != nil {
+			t.Fatal(e)
+		}
 		if e := f.createContext(ctx, n, image, "1001", []string{"sleep", "120"}, nil, h, "none"); e != nil {
 			t.Fatal(e)
 		}
@@ -68,6 +71,11 @@ func TestSharedWorkRuntime(t *testing.T) {
  test ! -e /var/lib/ci-runner/work
  test ! -e /job-disk
  test ! -e /var/run/docker.sock
+ test ! -e /templates
+ test -s /home/runner/.ci-workspace-ready
+ test -x /home/runner/bin/Runner.Worker
+ test -x /home/runner/externals/node24/bin/npm
+ printf 'private modification' > /home/runner/config.sh
  test ! -e /home/runner/private
  printf private > /home/runner/private
  ln -s /etc /home/runner/escape

@@ -6,7 +6,9 @@ while [ ! -e /tmp/ci-network-ready ]; do
  sleep 1
 done
 # The read-only image stays immutable; each job has a private disposable disk.
-cp -a /opt/actions-runner/. /home/runner/
+if [ ! -f /home/runner/.ci-workspace-ready ]; then
+ cp -a /opt/actions-runner/. /home/runner/
+fi
 # Controller and standalone jobs use one cache layout and environment setup.
 if [ "${CI_DEPENDENCY_CACHE:-}" = 1 ]; then
  . /opt/ci/cache-env.sh

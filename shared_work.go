@@ -41,7 +41,7 @@ func openSharedWork(path, volume, owner string) (*sharedWork, error) {
 	s := &sharedWork{root: root, volume: volume, owner: owner}
 	fail := func(e error) (*sharedWork, error) { s.Close(); return nil, e }
 	// Controllers run as root. Jobs cannot see these root-owned directories.
-	for _, p := range []string{"leases", "owners", "jobs"} {
+	for _, p := range []string{"leases", "owners", "jobs", "templates"} {
 		if err = root.Mkdir(p, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 			return fail(err)
 		}

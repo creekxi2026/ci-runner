@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: ./actions/setup-go
         with:
           go-version: '1.26.6'
           cache: false
@@ -58,6 +58,10 @@ jobs:
           git --version; node --version; npm --version; python3 --version
           go version; go env GOPROXY GOSUMDB; go test ./...
           python3 -m unittest discover -s tests -v
+          python3 scripts/verify-setup-go-patch.py
+          node scripts/check-cache-timer.cjs
+          test -s /home/runner/.ci-workspace-ready
+          test ! -e /templates
           # Public HTTPS reachability must not depend on anonymous API quotas.
           curl -fsS --max-time 30 https://github.com/robots.txt -o /dev/null
           if [ "$REQUEST_DATABASE" = true ]; then

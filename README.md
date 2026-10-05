@@ -52,6 +52,62 @@ Registry multi-tag publication is **not atomic**: a failed promotion can leave a
 
 ## Optional dependency caches
 
+### Private copies from immutable templates
+
+Production controllers prepare runner files once in the protected
+`ci-work-linux-arm64/templates/runner/<image-ID>` directory, then give each job
+its own files. On Btrfs (including the tested OrbStack local volumes), Linux
+`FICLONE` reflinks share extents until either file is modified. This is not a hard
+link: file identities, permissions and subsequent writes remain independent.
+The image overlay cannot necessarily reflink into a volume; that first transfer
+copies bytes once. Unsupported filesystems use an explicit byte-copy fallback,
+reported by the initializer's `copied_bytes` counter. No space savings are
+claimed for the fallback. `du` and Docker logical sizes can count shared extents
+more than once; they are not exclusive physical-byte measurements.
+
+`templates` is root-owned 0700. Only the network-disabled root initializer sees
+it plus one empty job home; workers mount only their own home/tmp subpaths.
+Publication uses a filesystem lock, staging, fsync and atomic rename; incomplete
+staging is rebuilt after interruption. Runner templates are keyed by Docker's
+immutable image config ID. Jobs can update their private runner without changing
+the template. Job cleanup removes private files; shared blocks remain until
+their last reference is removed.
+
+For mixed-event pools, administrators may explicitly publish an immutable
+dependency snapshot using `profiles/cache/publish-seed.py` from a reviewed, idle
+CI cache. Only npm `_cacache`, Go modules and one exact Go build namespace are
+selected. Source/worktree/node_modules/credentials are not selected. The source
+must not receive jobs during import; pause its controller after current jobs
+drain. Specify provenance (source cache trust lane, reviewed revision and locks).
+The printed SHA256 identifies the file manifest, provenance and toolchain/ABI.
+Set `DEPENDENCY_CACHE_SEED=<that SHA256>` and leave `DEPENDENCY_CACHE_MODE=off`.
+Each job receives private CoW cache copies, can write them normally, and never
+writes changes back to the seed. The initializer rejects mismatched toolchain/ABI
+or missing seeds. Shared writable cache and a private seed are mutually exclusive.
+
+The reusable workflow can recognize `CI_DEPENDENCY_SEED` and the initialized home
+to avoid downloading a second remote Go/npm archive for the same tool versions.
+Other tool versions keep their ordinary remote cache behavior. A seed is only a
+performance input: package integrity/go.sum checks and application tests remain
+required. Seeds cannot supply newly added dependencies until refreshed; ordinary
+package-manager downloads still work in that case.
+
+Templates are reusable caches **within the work volume**, alongside non-cache
+live jobs and admission leases. Do not delete the whole volume during execution.
+There is no automatic deletion of active seeds: when both controllers are idle
+and stopped, retire only template identities no longer configured by either
+deployment. Keep current/rollback identities intentionally; do not accumulate a
+new snapshot after every job. Agent Runtime storage is not mounted or altered.
+
+### Remote Go cache failure handling
+
+`actions/setup-go` is a pinned, MIT-licensed upstream distribution with one
+timer cleanup fix; see its README and `scripts/verify-setup-go-patch.py` for
+byte-for-byte provenance. Cache rejection no longer leaves a ten-minute timer
+alive. The underlying transport abort is a separate, unresolved network issue.
+
+### Shared writes in trusted manual pools
+
 Keep `DEPENDENCY_CACHE_MODE=off` for public/fork fleets and mixed-event private
 fleets. To opt in, use a **separate audited manual-only deployment**:
 

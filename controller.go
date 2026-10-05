@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"sync"
 	"syscall"
 	"time"
@@ -73,6 +74,7 @@ type fleet struct {
 	allowedEvents                 map[string]bool
 	databasePrefix                string
 	cache                         *dependencyCache
+	seed                          string
 	work                          *sharedWork
 	jobs                          map[string]string
 	scaleMu                       sync.Mutex
@@ -197,6 +199,12 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	h["ReadonlyRootfs"] = true
 	if err = f.prepareJobDisk(ctx, name, h); err != nil {
 		return err
+	}
+	if err = f.prepareWorkspace(ctx, name); err != nil {
+		return err
+	}
+	if f.seed != "" {
+		env = append(env, "CI_DEPENDENCY_SEED="+f.seed)
 	}
 	env, err = f.prepareDependencyCache(ctx, name, h, env)
 	if err != nil {
@@ -333,6 +341,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	seed := os.Getenv("DEPENDENCY_CACHE_SEED")
+	if seed != "" && (cache != nil || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(seed)) {
+		return fmt.Errorf("dependency seed requires exact SHA256 and shared writable cache off")
+	}
 	prefix := os.Getenv("POSTGRES_DATABASE_PREFIX")
 	if err := validateDatabasePrefix(prefix); err != nil {
 		return err
@@ -360,7 +372,7 @@ func run() error {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{cache: cache, client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{cache: cache, seed: seed, client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}
