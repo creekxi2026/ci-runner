@@ -56,7 +56,8 @@ jobs:
           git --version; node --version; npm --version; python3 --version
           go version; go env GOPROXY GOSUMDB; go test ./...
           python3 -m unittest discover -s tests -v
-          curl -fsS --max-time 30 https://api.github.com/zen
+          # Public HTTPS reachability must not depend on anonymous API quotas.
+          curl -fsS --max-time 30 https://github.com/robots.txt -o /dev/null
           if [ "$REQUEST_DATABASE" = true ]; then
             pg_isready -h "$CI_DATABASE_HOST" -U postgres
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE TABLE isolated (n int); INSERT INTO isolated VALUES (1); SELECT * FROM isolated;'

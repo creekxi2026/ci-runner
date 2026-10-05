@@ -1,5 +1,5 @@
 """Public-only HTTP/CONNECT proxy. Resolve once, validate all, dial pinned IP."""
-import ipaddress, socket, socketserver, select, urllib.parse, urllib.request, json, os, time, re, sys
+import ipaddress, socket, socketserver, select, urllib.parse, urllib.request, json, os, time, re, sys, errno
 
 # A quiet TLS peer may legitimately wait on server work. Still finite; the job's
 # independent 3600s hard lifetime bounds the helper container as a whole.
@@ -187,7 +187,13 @@ class Handler(socketserver.StreamRequestHandler):
                     if not data:
                         readers.remove(src)
                         diagnostic['eof_directions'].append(direction)
-                        (remote if src is self.connection else self.connection).shutdown(socket.SHUT_WR)
+                        try:
+                            (remote if src is self.connection else self.connection).shutdown(socket.SHUT_WR)
+                        except OSError as shutdown_error:
+                            # A peer can already be fully closed after both EOFs;
+                            # no unread direction remains to drain in that case.
+                            if readers or shutdown_error.errno != errno.ENOTCONN:
+                                raise
                         continue
                     if src is remote: response_started = True
                     (remote if src is self.connection else self.connection).sendall(data)

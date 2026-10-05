@@ -54,6 +54,27 @@ class Tunnel(unittest.TestCase):
             self.assertGreaterEqual(waits[0], 300)
             self.assertLessEqual(waits[0], 3600)
 
+    def test_bidirectional_eof_skips_redundant_shutdown_on_closed_client(self):
+        import errno
+        class Endpoint:
+            def settimeout(self, value): pass
+            def recv(self, count): return b''
+            def close(self): pass
+            def shutdown(self, direction):
+                if self is client:
+                    raise OSError(errno.ENOTCONN, 'already closed client')
+        client, remote = Endpoint(), Endpoint()
+        handler = object.__new__(m.Handler)
+        handler.connection = client
+        handler.rfile = io.BytesIO(b'CONNECT public.example:443 HTTP/1.1\r\n\r\n')
+        handler.wfile = io.BytesIO()
+        with patch.object(m, 'connect', return_value=remote), patch.object(m.select, 'select', side_effect=[([client], [], []), ([remote], [], [])]):
+            handler.handle()
+        record = json.loads(self.log_stream.getvalue())
+        self.assertEqual(record['eof_directions'], ['client', 'server'])
+        self.assertEqual(record['close_reason'], 'eof')
+        self.assertIsNone(record['error_type'])
+
     def test_client_half_close_drains_real_server_tail(self):
         client, proxy = socket.socketpair()
         remote, peer = socket.socketpair()
