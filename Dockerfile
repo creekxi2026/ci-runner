@@ -1,4 +1,4 @@
-FROM golang:1.26.3-bookworm@sha256:386d475a660466863d9f8c766fec64d7fdad3edac2c6a05020c09534d71edb4b AS build
+FROM golang:1.26.6-bookworm@sha256:7939e2c75db3d059fc944bb6464a916d0fa64bd5a3bd7b3528f2a1ac7673a0eb AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

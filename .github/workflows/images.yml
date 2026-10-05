@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.3'
+          go-version: '1.26.6'
           cache: false
       - run: |
           go test -race ./...
@@ -43,6 +43,23 @@ jobs:
               --output "type=image,name=ghcr.io/$GITHUB_REPOSITORY-$target,push-by-digest=true,name-canonical=true,push=true" \
               --metadata-file "deployment/$target.json" .
           done
+          # Prove the application toolchain is present without any network access
+          # before promoting this release for deployment.
+          runner_ref="$(python3 -c 'import json; m=json.load(open("deployment/runner.json")); print(m["image.name"]+"@"+m["containerimage.digest"])')"
+          docker pull "$runner_ref"
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,exec,size=64m,mode=1777 \
+            --entrypoint /bin/sh "$runner_ref" -ec '
+              /opt/ci/toolcache-init.sh /tmp/toolcache
+              test "$(/tmp/toolcache/go/1.26.6/arm64/bin/go version)" = "go version go1.26.6 linux/arm64"
+              test "$(/tmp/toolcache/node/24.14.0/arm64/bin/node --version)" = "v24.14.0"
+              test -f /tmp/toolcache/go/1.26.6/arm64.complete
+              test -f /tmp/toolcache/node/24.14.0/arm64.complete
+              test "$(readlink /tmp/toolcache/go/1.26.6/arm64)" = /opt/go
+              test "$(readlink /tmp/toolcache/node/24.14.0/arm64)" = /usr/local
+              test ! -w /opt/go/bin/go
+              test ! -w /usr/local/bin/node
+            '
           python3 scripts/promote_latest.py "$GITHUB_REPOSITORY" "$GITHUB_SHA" deployment
           python3 scripts/release_env.py "$GITHUB_REPOSITORY" "$GITHUB_SHA" deployment
           cp compose.yaml deployment/compose.yaml
