@@ -27,9 +27,16 @@ func (f *fleet) ownsJobDisk(n string, v diskVolume) bool {
 		v.Labels["ci-runner.storage"] == jobStorageSchema
 }
 
-// Each job owns one disk volume. Only fixed subdirectories are visible to the
-// runner/database; neither receives the complete volume or another job's data.
+// Production uses private subpaths of the shared work volume. The legacy
+// per-job volume path remains for lifecycle migration fixtures and recovery.
 func (f *fleet) prepareJobDisk(ctx context.Context, n string, host obj) error {
+	if f.work != nil {
+		if err := f.work.prepare(n); err != nil {
+			return err
+		}
+		host["Mounts"] = []obj{f.diskMount(n, "home", "/home/runner"), f.diskMount(n, "tmp", "/tmp")}
+		return nil
+	}
 	var v diskVolume
 	err := dockerContext(ctx, "GET", "/volumes/"+jobVolume(n), nil, &v)
 	if err == nil {
@@ -71,9 +78,12 @@ func (f *fleet) prepareJobDisk(ctx context.Context, n string, host obj) error {
 	return nil
 }
 
-// Remove only our ephemeral disk, after all job containers have gone. Docker's
-// non-forced DELETE refuses an in-use volume; failures retain the recovery state.
+// Remove only our job directory (or legacy owned disk) after containers leave.
+// The shared workspace and dependency cache volumes are never removed here.
 func (f *fleet) removeJobDisk(n string) error {
+	if j := f.state(n); f.work != nil && j != nil && j.shared {
+		return f.work.removeData(n)
+	}
 	var v diskVolume
 	err := docker("GET", "/volumes/"+jobVolume(n), nil, &v)
 	if errors.Is(err, errMissing) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -27,6 +28,10 @@ func (f *fleet) reconcileCurrent(ctx context.Context) error {
 			return nil
 		}
 		if err = f.start(ctx); err != nil {
+			if errors.Is(err, errCapacity) {
+				f.changed()
+				return nil
+			}
 			return err
 		}
 	}

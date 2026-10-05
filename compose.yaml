@@ -7,6 +7,7 @@ services:
     stop_grace_period: ${RUNNER_MAX_LIFETIME_SECONDS:-3600}s
     read_only: true
     cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     security_opt: [no-new-privileges:true]
     mem_limit: 256m
     cpus: 0.5
@@ -29,10 +30,14 @@ services:
       HTTP_PROXY: ${PUBLIC_EGRESS_UPSTREAM_PROXY:-}
       HTTPS_PROXY: ${PUBLIC_EGRESS_UPSTREAM_PROXY:-}
       EGRESS_NETWORK: ${COMPOSE_PROJECT_NAME:-ci-runner}_egress
+      JOB_WORK_ROOT: /var/lib/ci-runner/work
+      JOB_WORK_VOLUME: ci-work-linux-arm64
+      CONTROLLER_CONTAINER: ${COMPOSE_PROJECT_NAME:-ci-runner}-controller-1
       DEPLOYMENT_ID: ${COMPOSE_PROJECT_NAME:-ci-runner}
     secrets: [github_token]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - job_work:/var/lib/ci-runner/work
     networks: [egress]
     logging:
       driver: json-file
@@ -42,3 +47,8 @@ networks:
 secrets:
   github_token:
     file: ${GITHUB_TOKEN_FILE:-./.secrets/github-token}
+
+volumes:
+  job_work:
+    name: ci-work-linux-arm64
+    external: true

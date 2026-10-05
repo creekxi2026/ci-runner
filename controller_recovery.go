@@ -29,6 +29,7 @@ type jobState struct {
 	databaseReady                bool
 	gate                         bool
 	disk                         bool
+	shared                       bool
 	idleExec                     string // retained across ambiguous start/inspect responses
 }
 type messageProgress struct {
@@ -46,6 +47,9 @@ func (f *fleet) resourceLabels(n string) obj {
 	l["ci-runner.job"] = n
 	l["ci-runner.idle-gate"] = "1"
 	l["ci-runner.storage"] = jobStorageSchema
+	if f.work != nil {
+		l["ci-runner.storage"] = sharedWorkSchema
+	}
 	return l
 }
 func (f *fleet) state(n string) *jobState {
@@ -113,6 +117,11 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 	}
 	if network != "" {
 		if err := docker("DELETE", "/networks/"+network, nil, nil); err != nil {
+			return
+		}
+	}
+	if f.work != nil {
+		if err := f.work.release(n); err != nil {
 			return
 		}
 	}
@@ -267,7 +276,8 @@ func (f *fleet) recover() error {
 				continue
 			}
 			j := get(n)
-			j.disk = j.disk || c.Labels["ci-runner.storage"] == jobStorageSchema
+			j.shared = j.shared || c.Labels["ci-runner.storage"] == sharedWorkSchema
+			j.disk = j.disk || j.shared || c.Labels["ci-runner.storage"] == jobStorageSchema
 			j.resources = append(j.resources, name)
 			if name == n {
 				j.gate = c.Labels["ci-runner.idle-gate"] == "1"
@@ -283,7 +293,8 @@ func (f *fleet) recover() error {
 			continue
 		}
 		j := get(n)
-		j.disk = j.disk || net.Labels["ci-runner.storage"] == jobStorageSchema
+		j.shared = j.shared || net.Labels["ci-runner.storage"] == sharedWorkSchema
+		j.disk = j.disk || j.shared || net.Labels["ci-runner.storage"] == jobStorageSchema
 		j.created = net.Created
 		nets[n] = net.Name
 	}
@@ -291,6 +302,31 @@ func (f *fleet) recover() error {
 		n := v.Labels["ci-runner.job"]
 		if validJobName.MatchString(n) && f.ownsJobDisk(n, v) {
 			get(n).disk = true
+		}
+	}
+	if f.work != nil {
+		leases, err := f.work.owned()
+		if err != nil {
+			return err
+		}
+		for n, l := range leases {
+			j := get(n)
+			j.shared = l.Shared
+			j.disk = true
+			if j.created.IsZero() {
+				j.created = l.Created
+			}
+		}
+		for n, j := range groups {
+			if _, ok := leases[n]; !ok {
+				if j.shared {
+					return fmt.Errorf("shared job missing durable lease")
+				}
+				// Legacy jobs count against the same budget while being drained.
+				if err := f.work.reserve(n, true); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	for n, j := range groups {

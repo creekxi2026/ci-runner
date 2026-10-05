@@ -88,7 +88,7 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 		password = hex.EncodeToString(random[:])
 		h := secure()
 		if j.disk {
-			h["Mounts"] = []obj{jobDiskMount(n, "postgres", "/var/lib/postgresql/data"), jobDiskMount(n, "postgres-run", "/var/run/postgresql")}
+			h["Mounts"] = []obj{f.diskMount(n, "postgres", "/var/lib/postgresql/data"), f.diskMount(n, "postgres-run", "/var/run/postgresql")}
 		} else {
 			// Preserve already-running legacy jobs during a controller upgrade.
 			h["Tmpfs"] = obj{"/var/lib/postgresql/data": "rw,size=512m", "/var/run/postgresql": "rw,size=16m"}

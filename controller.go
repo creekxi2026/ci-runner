@@ -73,6 +73,7 @@ type fleet struct {
 	allowedEvents                 map[string]bool
 	databasePrefix                string
 	cache                         *dependencyCache
+	work                          *sharedWork
 	jobs                          map[string]string
 	scaleMu                       sync.Mutex
 	states                        map[string]*jobState
@@ -91,7 +92,7 @@ func (f *fleet) create(name, image, user string, cmd, env []string, host obj, ne
 func (f *fleet) createContext(ctx context.Context, name, image, user string, cmd, env []string, host obj, network string) error {
 	host["NetworkMode"] = network
 	host["LogConfig"] = obj{"Type": "json-file", "Config": obj{"max-size": "5m", "max-file": "2"}}
-	if err := dockerContext(ctx, "POST", "/containers/create?name="+name, obj{"Image": image, "User": user, "Cmd": cmd, "Env": env, "Labels": f.resourceLabels(jobName(name)), "HostConfig": host}, nil); err != nil {
+	if err := dockerContext(ctx, "POST", "/containers/create?name="+name, obj{"Image": image, "User": user, "Cmd": cmd, "Env": env, "Labels": f.containerLabels(name), "HostConfig": host}, nil); err != nil {
 		return err
 	}
 	return dockerContext(ctx, "POST", "/containers/"+name+"/start", nil, nil)
@@ -126,16 +127,24 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, life)
 	defer cancel()
 	name := "ci-job-" + uuid.NewString()[:12]
+	if f.work != nil {
+		if err = f.work.reserve(name, false); err != nil {
+			return err
+		}
+	}
 	network := name + "-net"
 	f.mu.Lock()
 	if f.stopping || len(f.jobs) >= 3 {
 		f.mu.Unlock()
+		if f.work != nil {
+			_ = f.work.release(name)
+		}
 		return fmt.Errorf("scheduling stopped or capacity full")
 	}
 	if f.jobs == nil {
 		f.jobs = map[string]string{}
 	}
-	j := &jobState{created: time.Now(), gate: true, disk: true}
+	j := &jobState{created: time.Now(), gate: true, disk: true, shared: f.work != nil}
 	j.mu.Lock()
 	if f.states == nil {
 		f.states = map[string]*jobState{}
@@ -357,6 +366,14 @@ func run() error {
 	}
 	f.idle, f.lifetime, err = timeoutConfig()
 	if err != nil {
+		return err
+	}
+	f.work, err = openSharedWork(os.Getenv("JOB_WORK_ROOT"), os.Getenv("JOB_WORK_VOLUME"), f.owner)
+	if err != nil {
+		return err
+	}
+	defer f.work.Close()
+	if err = f.verifyWorkMount(ctx); err != nil {
 		return err
 	}
 	f.changes = make(chan struct{}, 1)
