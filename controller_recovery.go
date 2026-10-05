@@ -28,6 +28,7 @@ type jobState struct {
 	recovered                    bool
 	databaseReady                bool
 	gate                         bool
+	disk                         bool
 	idleExec                     string // retained across ambiguous start/inspect responses
 }
 type messageProgress struct {
@@ -44,6 +45,7 @@ func (f *fleet) resourceLabels(n string) obj {
 	l := f.labels()
 	l["ci-runner.job"] = n
 	l["ci-runner.idle-gate"] = "1"
+	l["ci-runner.storage"] = jobStorageSchema
 	return l
 }
 func (f *fleet) state(n string) *jobState {
@@ -80,6 +82,11 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 	}
 	for _, r := range resources {
 		if err := docker("DELETE", "/containers/"+r+"?force=true&v=true", nil, nil); err != nil {
+			return
+		}
+	}
+	if j.disk {
+		if err := f.removeJobDisk(n); err != nil {
 			return
 		}
 	}
@@ -234,6 +241,10 @@ func (f *fleet) recover() error {
 	if err := docker("GET", "/networks"+query, nil, &networks); err != nil {
 		return err
 	}
+	var disks struct{ Volumes []diskVolume }
+	if err := docker("GET", "/volumes"+query, nil, &disks); err != nil {
+		return err
+	}
 	groups := map[string]*jobState{}
 	nets := map[string]string{}
 	get := func(n string) *jobState {
@@ -256,6 +267,7 @@ func (f *fleet) recover() error {
 				continue
 			}
 			j := get(n)
+			j.disk = j.disk || c.Labels["ci-runner.storage"] == jobStorageSchema
 			j.resources = append(j.resources, name)
 			if name == n {
 				j.gate = c.Labels["ci-runner.idle-gate"] == "1"
@@ -271,8 +283,15 @@ func (f *fleet) recover() error {
 			continue
 		}
 		j := get(n)
+		j.disk = j.disk || net.Labels["ci-runner.storage"] == jobStorageSchema
 		j.created = net.Created
 		nets[n] = net.Name
+	}
+	for _, v := range disks.Volumes {
+		n := v.Labels["ci-runner.job"]
+		if validJobName.MatchString(n) && f.ownsJobDisk(n, v) {
+			get(n).disk = true
+		}
 	}
 	for n, j := range groups {
 		found := false

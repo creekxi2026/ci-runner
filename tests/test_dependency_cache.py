@@ -42,7 +42,7 @@ class DependencyCacheTests(unittest.TestCase):
             self.assertFalse((root / 'pip').exists())
 
     def test_image_and_controller_opt_in_wiring(self):
-        self.assertIn('cache-init.py /opt/ci/', (ROOT / 'Dockerfile').read_text())
+        self.assertTrue(any(line.startswith('COPY ') and 'cache-init.py' in line.split()[1:-1] and line.split()[-1] == '/opt/ci/' for line in (ROOT / 'Dockerfile').read_text().splitlines()))
         controller = (ROOT / 'controller.go').read_text()
         self.assertIn('f.prepareDependencyCache(ctx, name, h, env)', controller)
         self.assertIn('os.Getenv("DEPENDENCY_CACHE_MODE")', controller)

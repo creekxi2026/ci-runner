@@ -48,7 +48,7 @@ jobs:
           runner_ref="$(python3 -c 'import json; m=json.load(open("deployment/runner.json")); print(m["image.name"]+"@"+m["containerimage.digest"])')"
           docker pull "$runner_ref"
           docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --tmpfs /tmp:rw,exec,size=64m,mode=1777 \
+            --security-opt no-new-privileges --mount type=volume,dst=/tmp \
             --entrypoint /bin/sh "$runner_ref" -ec '
               /opt/ci/toolcache-init.sh /tmp/toolcache
               test "$(/tmp/toolcache/go/1.26.6/arm64/bin/go version)" = "go version go1.26.6 linux/arm64"
@@ -60,6 +60,11 @@ jobs:
               test ! -w /opt/go/bin/go
               test ! -w /usr/local/bin/node
             '
+          # Exercise the new image through the real controller's disk provisioner.
+          postgres_ref="$(python3 -c 'import json; m=json.load(open("deployment/postgres.json")); print(m["image.name"]+"@"+m["containerimage.digest"])')"
+          docker pull "$postgres_ref"
+          CI_DISK_INTEGRATION_IMAGE="$runner_ref" CI_DISK_INTEGRATION_POSTGRES="$postgres_ref" \
+            go test -run '^TestJobDiskRuntime$' -v
           python3 scripts/promote_latest.py "$GITHUB_REPOSITORY" "$GITHUB_SHA" deployment
           python3 scripts/release_env.py "$GITHUB_REPOSITORY" "$GITHUB_SHA" deployment
           cp compose.yaml deployment/compose.yaml

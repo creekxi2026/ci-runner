@@ -93,10 +93,11 @@ func (f *fleet) prepareDependencyCache(ctx context.Context, job string, host obj
 	if err = dockerContext(ctx, "DELETE", "/containers/"+helper+"?force=true", nil, nil); err != nil {
 		return nil, err
 	}
-	host["Mounts"] = []obj{
+	existing, _ := host["Mounts"].([]obj)
+	host["Mounts"] = append(existing, []obj{
 		{"Type": "volume", "Source": c.volume, "Target": "/opt/ci-cache", "ReadOnly": false, "VolumeOptions": obj{"NoCopy": true, "Subpath": "data"}},
 		{"Type": "volume", "Source": c.volume, "Target": "/opt/ci-tools", "ReadOnly": true, "VolumeOptions": obj{"NoCopy": true, "Subpath": "data/tools"}},
-	}
+	}...)
 	return append(env, "npm_config_cache=/home/runner/.npm", "PIP_CACHE_DIR=/opt/ci-cache/pip", "GOMODCACHE=/opt/ci-cache/gomod", "CI_DEPENDENCY_CACHE=1", "CI_CACHE_ABI=ubuntu24-038394a"), nil
 }
 

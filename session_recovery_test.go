@@ -26,7 +26,7 @@ func (s *freshSession) GetMessage(ctx context.Context, last, capacity int) (*sca
 
 func TestFreshSessionRecoversAlreadyAcquiredDemand(t *testing.T) {
 	networks := map[string]string{}
-	withEngine(t, func(w http.ResponseWriter, r *http.Request) {
+	withJobDiskEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch {
 		case strings.HasSuffix(p, "/containers/create"):

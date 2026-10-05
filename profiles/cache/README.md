@@ -20,6 +20,9 @@ python3 profiles/cache/create-cache.py \
 docker compose -f profiles/cache/compose.yaml run --rm verify
 ```
 
+Standalone jobs use anonymous private disk volumes for HOME and temporary files;
+`compose run --rm` removes them on exit. The shared cache remains external.
+
 A new volume starts with empty package-manager caches and an empty optional tools
 directory. It does not require an application lockfile or seed image. The helper
 uses an already available generic Linux runner image (`--image` selects another);

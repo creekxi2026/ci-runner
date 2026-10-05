@@ -43,6 +43,8 @@ func TestRecoveryAdoptsLiveCleansOrphanAndHonorsLifetime(t *testing.T) {
 				t.Error("unscoped recovery")
 			}
 			json.NewEncoder(w).Encode([]obj{{"Names": []string{"/" + live}, "Labels": obj{"ci-runner.owner": "unit"}}, {"Names": []string{"/" + live + "-pg"}, "Labels": obj{"ci-runner.owner": "unit"}}, {"Names": []string{"/" + orphan + "-pg"}, "Labels": obj{"ci-runner.owner": "unit"}}, {"Names": []string{"/foreign"}, "Labels": obj{"ci-runner.owner": "other"}}})
+		case p == "/volumes":
+			io.WriteString(w, `{"Volumes":[]}`)
 		case p == "/networks":
 			json.NewEncoder(w).Encode([]obj{{"Name": live + "-net", "Labels": obj{"ci-runner.owner": "unit"}, "Created": old}, {"Name": orphan + "-net", "Labels": obj{"ci-runner.owner": "unit"}, "Created": old}})
 		case p == "/containers/"+live+"/json":
@@ -164,7 +166,7 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 	api := &fakeRunners{}
 	networks := map[string]string{}
 	created := 0
-	withEngine(t, func(w http.ResponseWriter, r *http.Request) {
+	withJobDiskEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch {
 		case strings.HasSuffix(p, "/containers/create"):
@@ -181,9 +183,8 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 				if v.HostConfig["ReadonlyRootfs"] != true {
 					t.Error("runner root filesystem is unbounded writable storage")
 				}
-				tmpfs, _ := v.HostConfig["Tmpfs"].(map[string]any)
-				if !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "size=2g") || fmt.Sprint(tmpfs["/tmp"]) != "rw,exec,size=1g,nr_inodes=32768,mode=1777" || !strings.Contains(fmt.Sprint(tmpfs["/home/runner"]), "rw,exec,") {
-					t.Error("runner needs bounded 1 GiB executable temp storage with original inode/permission limits")
+				if v.HostConfig["Tmpfs"] != nil || len(v.HostConfig["Mounts"].([]any)) != 2 {
+					t.Error("runner must use its private disk subdirectories")
 				}
 				if v.HostConfig["Memory"].(float64) != 4*1024*1024*1024 {
 					t.Error("runner memory must remain bounded at the 4 GiB budget")
@@ -220,7 +221,7 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if api.generated != 3 || len(f.jobs) != 3 || created != 9 {
+	if api.generated != 3 || len(f.jobs) != 3 || created != 12 {
 		t.Fatalf("overprovision: JIT=%d jobs=%d creates=%d", api.generated, len(f.jobs), created)
 	}
 	if err := f.start(context.Background()); err == nil {
@@ -306,7 +307,7 @@ func TestAmbiguousReadyFailureDoesNotKillPotentiallyBusyRunner(t *testing.T) {
 	api := &fakeRunners{}
 	networks := map[string]string{}
 	deletes := 0
-	withEngine(t, func(w http.ResponseWriter, r *http.Request) {
+	withJobDiskEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch {
 		case strings.HasSuffix(p, "/containers/create"):
@@ -437,7 +438,7 @@ func TestPartialMessageRetryDoesNotReplaceAlreadyCompletedCapacity(t *testing.T)
 	networks := map[string]string{}
 	creates := 0
 	fail := true
-	withEngine(t, func(w http.ResponseWriter, r *http.Request) {
+	withJobDiskEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch {
 		case p == "/v1.47/networks/create":

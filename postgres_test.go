@@ -10,7 +10,7 @@ import (
 
 func TestDefaultJobHasNoDatabase(t *testing.T) {
 	creates := []string{}
-	withDockerHTTP(t, func(w http.ResponseWriter, r *http.Request) {
+	withJobDiskEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/containers/create"):
 			name := r.URL.Query().Get("name")

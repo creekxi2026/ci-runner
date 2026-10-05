@@ -5,7 +5,7 @@ while [ ! -e /tmp/ci-network-ready ]; do
  n=$((n+1)); [ "$n" -lt 120 ] || exit 1
  sleep 1
 done
-# The read-only image stays immutable; each job initializes its bounded tmpfs.
+# The read-only image stays immutable; each job has a private disposable disk.
 cp -a /opt/actions-runner/. /home/runner/
 # Controller and standalone jobs use one cache layout and environment setup.
 if [ "${CI_DEPENDENCY_CACHE:-}" = 1 ]; then

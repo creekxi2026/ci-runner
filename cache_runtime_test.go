@@ -31,18 +31,23 @@ func TestCacheRuntime(t *testing.T) {
 						t.Errorf("fixture cleanup %s: %v", n, e)
 					}
 				}
+				if e := f.removeJobDisk(name); e != nil {
+					t.Error(e)
+				}
 			}()
 			host := secure()
 			host["ReadonlyRootfs"] = true
 			host["Memory"] = int64(4 * 1024 * 1024 * 1024)
 			host["MemorySwap"] = host["Memory"]
-			host["Tmpfs"] = obj{"/home/runner": "rw,exec,size=2g,uid=1001,gid=1001,mode=0700", "/tmp": "rw,exec,size=1g,mode=1777"}
+			if e := f.prepareJobDisk(context.Background(), name, host); e != nil {
+				t.Fatal(e)
+			}
 			env, e := f.prepareDependencyCache(context.Background(), name, host, []string{"HOME=/home/runner"})
 			if e != nil {
 				t.Fatal(e)
 			}
 			mounts := host["Mounts"].([]obj)
-			if len(mounts) != 2 || mounts[0]["Source"] != c.volume || mounts[1]["ReadOnly"] != true {
+			if len(mounts) != 4 || mounts[0]["Source"] != jobVolume(name) || mounts[2]["Source"] != c.volume || mounts[3]["ReadOnly"] != true {
 				t.Fatal("incorrect mounts")
 			}
 			marker := "/opt/ci-cache/go-build/" + f.owner

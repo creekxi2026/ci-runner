@@ -15,10 +15,13 @@ services:
     memswap_limit: 4g
     cpus: 2
     pids_limit: 512
-    tmpfs:
-      - /home/runner:rw,exec,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700
-      - /tmp:rw,exec,size=1g,nr_inodes=65536,mode=1777
     volumes:
+      # Anonymous private disks are removed by `compose run --rm`.
+      # Docker initializes permissions from the image's existing directories.
+      - type: volume
+        target: /home/runner
+      - type: volume
+        target: /tmp
       - type: volume
         source: cache
         target: /opt/ci-cache

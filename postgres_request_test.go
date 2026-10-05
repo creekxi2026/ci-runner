@@ -10,7 +10,7 @@ import (
 )
 
 func TestPerJobDatabaseRequestIsIsolatedAndIdempotent(t *testing.T) {
-	for _, scenario := range []string{"default", "requested", "recovered-stopped", "socket-only"} {
+	for _, scenario := range []string{"default", "requested", "disk", "recovered-stopped", "socket-only"} {
 		t.Run(scenario, func(t *testing.T) {
 			request := scenario != "default"
 			recovered := scenario == "recovered-stopped"
@@ -34,6 +34,9 @@ func TestPerJobDatabaseRequestIsIsolatedAndIdempotent(t *testing.T) {
 					json.NewDecoder(r.Body).Decode(&v)
 					commands[name] = v.Cmd
 					if name == "job-pg" {
+						if scenario == "disk" && (v.HostConfig["Tmpfs"] != nil || len(v.HostConfig["Mounts"].([]any)) != 2) {
+							t.Error("database must use disk subdirectories")
+						}
 						if v.HostConfig["NetworkMode"] != "job-net" || v.HostConfig["PortBindings"] != nil || v.HostConfig["Binds"] != nil {
 							t.Error("database escapes job")
 						}
@@ -78,6 +81,7 @@ func TestPerJobDatabaseRequestIsIsolatedAndIdempotent(t *testing.T) {
 			})
 			f := &fleet{owner: "unit", jobs: map[string]string{"job": "job-net"}, lifetime: time.Hour}
 			f.state("job").created = time.Now()
+			f.state("job").disk = scenario == "disk"
 			if scenario == "socket-only" {
 				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 				defer cancel()

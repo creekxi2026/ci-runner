@@ -135,7 +135,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if f.jobs == nil {
 		f.jobs = map[string]string{}
 	}
-	j := &jobState{created: time.Now(), gate: true}
+	j := &jobState{created: time.Now(), gate: true, disk: true}
 	j.mu.Lock()
 	if f.states == nil {
 		f.states = map[string]*jobState{}
@@ -186,7 +186,9 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	h["Memory"] = 4 * 1024 * 1024 * 1024
 	h["MemorySwap"] = h["Memory"]
 	h["ReadonlyRootfs"] = true
-	h["Tmpfs"] = obj{"/home/runner": "rw,exec,size=2g,nr_inodes=262144,uid=1001,gid=1001,mode=0700", "/tmp": "rw,exec,size=1g,nr_inodes=32768,mode=1777"}
+	if err = f.prepareJobDisk(ctx, name, h); err != nil {
+		return err
+	}
 	env, err = f.prepareDependencyCache(ctx, name, h, env)
 	if err != nil {
 		return err

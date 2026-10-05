@@ -52,6 +52,8 @@ jobs:
           [[ "$HOLD_SECONDS" =~ ^[0-9]{1,3}$ ]] && (( 10#$HOLD_SECONDS <= 300 ))
           test "$(uname -m)" = aarch64
           test ! -e /var/run/docker.sock
+          test "$(stat -f -c %T /home/runner)" != tmpfs
+          test "$(stat -f -c %T /tmp)" != tmpfs
           ! command -v sudo
           git --version; node --version; npm --version; python3 --version
           go version; go env GOPROXY GOSUMDB; go test ./...
