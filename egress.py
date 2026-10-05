@@ -1,5 +1,9 @@
 """Public-only HTTP/CONNECT proxy. Resolve once, validate all, dial pinned IP."""
-import ipaddress, socket, socketserver, select, urllib.parse, urllib.request, json, os, time
+import ipaddress, socket, socketserver, select, urllib.parse, urllib.request, json, os, time, re, sys
+
+# A quiet TLS peer may legitimately wait on server work. Still finite; the job's
+# independent 3600s hard lifetime bounds the helper container as a whole.
+RELAY_IDLE_SECONDS = 300
 
 
 class NoResolverRedirect(urllib.request.HTTPRedirectHandler):
@@ -88,29 +92,47 @@ def public(value):
         return False
     return ip.is_global and not ip.is_multicast and not ip.is_reserved
 
-def connect(host, port):
+def connect(host, port, diagnostic=None):
+    diagnostic = diagnostic if diagnostic is not None else {}
+    diagnostic['phase'] = 'policy'
     if port not in (80, 443):
         raise ValueError('port denied')
+    diagnostic['phase'] = 'resolve'
     answers = resolve(host, port)
-    if not answers or any(not public(a[4][0]) for a in answers):
+    if not answers:
+        raise OSError('DNS returned no addresses')
+    diagnostic['phase'] = 'policy'
+    if any(not public(a[4][0]) for a in answers):
         raise ValueError('destination denied')
     upstream = os.environ.get('PUBLIC_EGRESS_UPSTREAM_PROXY', '')
+    last_error = None
     for family, kind, proto, _, address in answers:
+        diagnostic.update(phase='upstream_handshake' if upstream else 'dial', peer_ip=str(ipaddress.ip_address(address[0])))
         if upstream:
             try:
                 return upstream_tunnel(address, upstream)
-            except OSError:
+            except OSError as error:
+                last_error = error
                 continue
         s = socket.socket(family, kind, proto); s.settimeout(15)
         try:
             s.connect(address); return s
-        except OSError:
+        except OSError as error:
+            last_error = error
             s.close()
-    raise OSError('connection failed')
+    raise last_error or OSError('connection failed')
 
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
         remote = None
+        response_started = False
+        started = time.monotonic()
+        last_io = started
+        diagnostic = dict(event='egress_close', hostname=None, peer_ip=None,
+                          port=None, phase='request', error_type=None,
+                          close_reason='eof', close_direction='both',
+                          bytes_client_to_server=0, bytes_server_to_client=0,
+                          eof_directions=[])
         try:
             self.connection.settimeout(20)
             first = self.rfile.readline(8193)
@@ -124,30 +146,74 @@ class Handler(socketserver.StreamRequestHandler):
                 headers.append(line)
             if method=='CONNECT':
                 u=urllib.parse.urlsplit('//'+target)
-                remote=connect(u.hostname, u.port or 443)
-                self.wfile.write(b'HTTP/1.1 200 Connection Established\r\n\r\n');self.wfile.flush()
+                port = u.port or 443
             else:
                 u=urllib.parse.urlsplit(target)
                 if u.scheme!='http' or u.username or u.password: raise ValueError('scheme')
-                remote=connect(u.hostname,u.port or 80)
+                port = u.port or 80
+            # Only DNS-label syntax, not raw authority/URL, enters diagnostics.
+            host = u.hostname
+            labels = (host[:-1] if host and host.endswith('.') else host or '').split('.')
+            if host and len(host) <= 253 and all(re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label) for label in labels):
+                diagnostic['hostname'] = host
+            diagnostic.update(port=port, phase='policy')
+            remote=connect(host, port, diagnostic=diagnostic)
+            diagnostic['phase'] = 'response'
+            if method=='CONNECT':
+                response_started = True
+                self.wfile.write(b'HTTP/1.1 200 Connection Established\r\n\r\n');self.wfile.flush()
+            else:
                 path=u.path or '/'
                 if u.query: path+='?'+u.query
                 remote.sendall((method+' '+path+' '+version+'\r\n').encode('ascii'))
                 remote.sendall(b''.join(h for h in headers if not h.lower().startswith((b'proxy-',b'connection:')))+b'Connection: close\r\n\r\n')
             # HTTP downloads and CONNECT only; POST bodies are relayed from the
             # unbuffered input stream so no buffered bytes get lost.
-            while True:
-                ready,_,_=select.select([self.connection,remote],[],[],90)
-                if not ready: break
+            readers = [self.connection, remote]
+            self.connection.settimeout(RELAY_IDLE_SECONDS)
+            remote.settimeout(RELAY_IDLE_SECONDS)
+            diagnostic['phase'] = 'relay'
+            last_io = time.monotonic()
+            while readers:
+                diagnostic['close_direction'] = 'both'
+                ready,_,_=select.select(readers,[],[],RELAY_IDLE_SECONDS)
+                if not ready:
+                    diagnostic.update(close_reason='idle_timeout', error_type='TimeoutError')
+                    break
                 for src in ready:
+                    direction = 'client' if src is self.connection else 'server'
+                    diagnostic['close_direction'] = direction
                     data=src.recv(65536)
-                    if not data:return
+                    if not data:
+                        readers.remove(src)
+                        diagnostic['eof_directions'].append(direction)
+                        (remote if src is self.connection else self.connection).shutdown(socket.SHUT_WR)
+                        continue
+                    if src is remote: response_started = True
                     (remote if src is self.connection else self.connection).sendall(data)
-        except (OSError,ValueError,UnicodeError):
-            try:self.wfile.write(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                    diagnostic['bytes_client_to_server' if src is self.connection else 'bytes_server_to_client'] += len(data)
+                    last_io = time.monotonic()
+            if not readers: diagnostic['close_direction'] = 'both'
+        except (OSError,ValueError,UnicodeError) as error:
+            diagnostic['error_type'] = type(error).__name__
+            diagnostic['close_reason'] = 'error'
+            if response_started: return
+            if isinstance(error, (TimeoutError, socket.timeout)):
+                status = '504 Gateway Timeout'
+            elif isinstance(error, OSError) or diagnostic['phase'] in ('resolve', 'dial', 'upstream_handshake'):
+                status = '502 Bad Gateway'
+            else:
+                status = '403 Forbidden'
+            try:self.wfile.write(('HTTP/1.1 ' + status + '\r\nContent-Length: 0\r\nConnection: close\r\n\r\n').encode('ascii'))
             except OSError:pass
         finally:
             if remote:remote.close()
+            diagnostic.update(duration_seconds=round(time.monotonic() - started, 6),
+                              last_io_seconds=round(last_io - started, 6))
+            try:
+                print(json.dumps(diagnostic, separators=(',', ':')), file=sys.stderr, flush=True)
+            except OSError:
+                pass
     rbufsize=0
 
 class Server(socketserver.ThreadingTCPServer):
