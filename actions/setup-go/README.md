@@ -16,9 +16,13 @@ their distribution directly; they are not installed into runner images.
 
 `upstream.json` records the original file SHA256 digests. The MIT license is
 retained. Run `python3 scripts/verify-setup-go-patch.py` to reverse the one patch
-in memory and verify every original file byte. To reproduce, download those four
+in memory and verify every original file byte. To reproduce, download those five
 files from the pinned upstream commit, then run that script with `--apply`.
 Run `node scripts/check-cache-timer.cjs` for real child-process lifetime checks.
+With Go 1.26.6 preinstalled in RUNNER_TOOL_CACHE, run
+`node scripts/check-setup-go-action.cjs` to execute the distribution and verify
+its matcher registration and diagnostic parsing. The regression also proves
+that a missing matcher fails validation even when Node exits successfully.
 
 Track https://github.com/actions/toolkit/issues/2470. Remove this fork and return
 callers to a fixed, pinned upstream action after the same regression passes.
