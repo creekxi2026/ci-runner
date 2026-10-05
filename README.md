@@ -23,7 +23,15 @@ docker compose up -d
 
 Use the selected scale-set label in `runs-on`. The included smoke workflow defaults to four successful jobs with hard concurrency **three**. Set `fail_slot4=true` only when deliberately exercising failed-job cleanup.
 
-The [blank configuration template](.env.example) is also available for manual setup. All image digests and `IMAGE_REVISION` must come from the same successful build's environment; the controller rejects floating workload images, wrong architectures and a mismatched runner revision. All three image pushes must succeed before the deployment artifact is published. Partial candidate pushes never update default deployment references.
+The [blank configuration template](.env.example) is also available for manual setup. All image digests and `IMAGE_REVISION` must come from the same successful build's environment; the controller rejects floating workload images, wrong architectures and a mismatched runner revision.
+
+### Image publication and deployment snapshots
+
+The cloud workflow publishes three separate GHCR packages: `ghcr.io/<owner>/ci-runner-controller`, `ghcr.io/<owner>/ci-runner-runner`, and `ghcr.io/<owner>/ci-runner-postgres`. Each package has only the `latest` tag; no source-revision or build-ID tags are generated. The full source SHA remains in OCI labels and the deployment artifact.
+
+Publication runs are serialized without cancelling an in-progress run. ARM64 candidates are pushed by digest without tags. All three publication digests must validate before any `latest` promotion begins. Promotions preserve the single-manifest digest rather than creating a new index. Only after all promotions succeed does the workflow generate and upload the deployment artifact.
+
+Registry multi-tag publication is **not atomic**: a failed promotion can leave a mixture of old and new `latest` tags. Failed candidate pushes do not change `latest`, and failed promotions do not produce a deployment artifact. The successful artifact—not the mutable tags—selects a coherent deployment. Its `env.txt` fixes all three role-package references as `ghcr.io/<owner>/ci-runner-<role>@sha256:...` for that deployment. Jobs never resolve `latest`; existing deployments keep their fixed snapshots until explicitly updated. Older untagged digests are not a guaranteed registry archive, so retain the selected images locally or in an approved archive if long-term rollback is required.
 
 ## Lifecycle and storage
 

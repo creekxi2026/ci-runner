@@ -1,0 +1,25 @@
+name: Retire legacy image package
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Only after migration and E2E: delete-ci-runner-legacy-package'
+        required: true
+        type: string
+permissions:
+  contents: read
+  packages: write
+jobs:
+  retire:
+    if: github.repository == 'creekxi2026/ci-runner' && inputs.confirmation == 'delete-ci-runner-legacy-package'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Delete only the exact legacy package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RETIRE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 scripts/retire_legacy_package.py
