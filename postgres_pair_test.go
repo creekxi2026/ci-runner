@@ -9,7 +9,7 @@ import (
 )
 
 func TestPairedLeaseDoesNotExposeBootstrapSecrets(t *testing.T) {
-	for _, scenario := range []string{"fresh", "recovered", "provision-failed", "verify-failed", "unrequested", "wrong-owner", "prefix-changed", "prefix-disabled"} {
+	for _, scenario := range []string{"fresh", "recovered", "provision-failed", "verify-failed", "unrequested", "wrong-owner", "prefix-changed", "prefix-disabled", "suffix-changed", "legacy-missing-suffix", "single-fresh", "single-recovered"} {
 		t.Run(scenario, func(t *testing.T) {
 			created, published, provisions := 0, 0, 0
 			bootstrap := strings.Repeat("a", 48)
@@ -20,7 +20,7 @@ func TestPairedLeaseDoesNotExposeBootstrapSecrets(t *testing.T) {
 				p := strings.TrimPrefix(r.URL.Path, "/v1.47")
 				switch {
 				case p == "/containers/job-pg/json":
-					if scenario == "fresh" && created == 0 {
+					if (scenario == "fresh" || scenario == "single-fresh") && created == 0 {
 						w.WriteHeader(404)
 						return
 					}
@@ -28,7 +28,15 @@ func TestPairedLeaseDoesNotExposeBootstrapSecrets(t *testing.T) {
 					if scenario == "wrong-owner" {
 						owner = "other"
 					}
-					json.NewEncoder(w).Encode(obj{"State": obj{"Running": true}, "Config": obj{"Labels": obj{"ci-runner.owner": owner, "ci-runner.job": "job"}, "Env": []string{"POSTGRES_PASSWORD=" + bootstrap, "CI_DATABASE_PREFIX=closet_ai_test_"}}, "NetworkSettings": obj{"Networks": obj{"job-net": obj{"IPAddress": "172.20.0.4"}}}})
+					pgEnv := []string{"POSTGRES_PASSWORD=" + bootstrap, "CI_DATABASE_PREFIX=example_test_"}
+					suffix := "_scratch"
+					if strings.HasPrefix(scenario, "single-") {
+						suffix = ""
+					}
+					if scenario != "legacy-missing-suffix" {
+						pgEnv = append(pgEnv, "CI_DATABASE_COMPANION_SUFFIX="+suffix)
+					}
+					json.NewEncoder(w).Encode(obj{"State": obj{"Running": true}, "Config": obj{"Labels": obj{"ci-runner.owner": owner, "ci-runner.job": "job"}, "Env": pgEnv}, "NetworkSettings": obj{"Networks": obj{"job-net": obj{"IPAddress": "172.20.0.4"}}}})
 				case p == "/containers/job-proxy/json":
 					json.NewEncoder(w).Encode(obj{"NetworkSettings": obj{"Networks": obj{"job-net": obj{"IPAddress": "172.20.0.2"}}}})
 				case p == "/containers/create":
@@ -88,17 +96,23 @@ func TestPairedLeaseDoesNotExposeBootstrapSecrets(t *testing.T) {
 					w.WriteHeader(200)
 				}
 			})
-			f := &fleet{owner: "unit", databasePrefix: "closet_ai_test_", jobs: map[string]string{"job": "job-net"}, lifetime: time.Hour}
+			f := &fleet{owner: "unit", databasePrefix: "example_test_", companionSuffix: "_scratch", jobs: map[string]string{"job": "job-net"}, lifetime: time.Hour}
 			if scenario == "prefix-changed" {
 				f.databasePrefix = "different_"
 			}
 			if scenario == "prefix-disabled" {
 				f.databasePrefix = ""
 			}
+			if scenario == "suffix-changed" {
+				f.companionSuffix = "_other"
+			}
+			if strings.HasPrefix(scenario, "single-") {
+				f.companionSuffix = ""
+			}
 			f.state("job").created = time.Now()
 			f.provisionDatabase("job", "job-net")
 			f.provisionDatabase("job", "job-net")
-			good := scenario == "fresh" || scenario == "recovered"
+			good := scenario == "fresh" || scenario == "recovered" || strings.HasPrefix(scenario, "single-")
 			if !good {
 				if published != 0 || f.state("job").databaseReady {
 					t.Fatal("failed lease published")
@@ -114,7 +128,11 @@ func TestPairedLeaseDoesNotExposeBootstrapSecrets(t *testing.T) {
 				values[k] = v
 			}
 			name := values["CI_DATABASE_NAME"]
-			if len(name) != len("closet_ai_test_")+24 || !strings.HasPrefix(name, "closet_ai_test_") || values["CI_DATABASE_COMPANION_NAME"] != name+"_staging" || values["PGDATABASE"] != name || values["PGUSER"] == "postgres" || values["PGPASSWORD"] == "" || values["PGPASSWORD"] == bootstrap {
+			companion := name + "_scratch"
+			if f.companionSuffix == "" {
+				companion = ""
+			}
+			if len(name) != len("example_test_")+24 || !strings.HasPrefix(name, "example_test_") || values["CI_DATABASE_COMPANION_NAME"] != companion || values["PGDATABASE"] != name || values["PGUSER"] == "postgres" || values["PGPASSWORD"] == "" || values["PGPASSWORD"] == bootstrap {
 				t.Fatalf("invalid lease metadata (keys=%d)", len(values))
 			}
 			// Simulate a controller restart against the same private cluster bootstrap state.

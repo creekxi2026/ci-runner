@@ -14,21 +14,36 @@ type databaseLease struct{ name, companion, user, password string }
 
 var databasePrefixPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*_$`)
 
-func validateDatabasePrefix(prefix string) error {
+// Named leases require an explicit companion choice; an old prefix-only
+// deployment must not silently switch from two databases to one on upgrade.
+func databaseCompanionSuffix(prefix, option string) (string, error) {
 	if prefix == "" {
-		return nil
+		if option != "" && option != "none" {
+			return "", fmt.Errorf("POSTGRES_COMPANION_SUFFIX requires POSTGRES_DATABASE_PREFIX")
+		}
+		return "", nil
 	}
-	if !databasePrefixPattern.MatchString(prefix) || len(prefix)+24+len("_staging") > 63 {
-		return fmt.Errorf("invalid POSTGRES_DATABASE_PREFIX: use a lowercase identifier prefix ending in underscore, at most 31 bytes")
+	if !databasePrefixPattern.MatchString(prefix) || len(prefix) > 31 {
+		return "", fmt.Errorf("invalid POSTGRES_DATABASE_PREFIX: use a lowercase identifier prefix ending in underscore, at most 31 bytes")
 	}
-	return nil
+	if option == "none" {
+		return "", nil
+	}
+	if !regexp.MustCompile(`^_[a-z0-9_]+$`).MatchString(option) || len(prefix)+24+len(option) > 63 {
+		return "", fmt.Errorf("set POSTGRES_COMPANION_SUFFIX explicitly to none or a lowercase suffix starting with underscore; database names must fit 63 bytes")
+	}
+	return option, nil
 }
-func pairedLease(owner, job, prefix, bootstrap string) databaseLease {
+func namedLease(owner, job, prefix, companionSuffix, bootstrap string) databaseLease {
 	id := sha256.Sum256([]byte(owner + "\x00" + job))
 	suffix := hex.EncodeToString(id[:12])
 	mac := hmac.New(sha256.New, []byte(bootstrap))
 	mac.Write([]byte("ci-runner-lease\x00" + owner + "\x00" + job + "\x00" + prefix))
-	return databaseLease{prefix + suffix, prefix + suffix + "_staging", "ci_" + suffix, hex.EncodeToString(mac.Sum(nil))}
+	companion := ""
+	if companionSuffix != "" {
+		companion = prefix + suffix + companionSuffix
+	}
+	return databaseLease{prefix + suffix, companion, "ci_" + suffix, hex.EncodeToString(mac.Sum(nil))}
 }
 func (l databaseLease) env(host string) []string {
 	return []string{"CI_DATABASE_NAME=" + l.name, "CI_DATABASE_COMPANION_NAME=" + l.companion, "CI_DATABASE_HOST=" + host, "PGHOST=" + host, "PGPORT=5432", "PGDATABASE=" + l.name, "PGUSER=" + l.user, "PGPASSWORD=" + l.password, "DATABASE_URL=" + fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", l.user, l.password, net.JoinHostPort(host, "5432"), l.name)}
@@ -45,7 +60,8 @@ BEGIN
  IF EXISTS (SELECT FROM pg_roles WHERE rolname='$CI_LEASE_USER') THEN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='$CI_LEASE_USER' AND rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls AND rolvaliduntil IS NULL)
    OR EXISTS (SELECT FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname='$CI_LEASE_USER'))
-   OR (SELECT count(*) FROM pg_database WHERE datname IN ('$CI_LEASE_PRIMARY','$CI_LEASE_COMPANION') AND datdba=(SELECT oid FROM pg_roles WHERE rolname='$CI_LEASE_USER')) <> 2
+   OR (SELECT count(*) FROM pg_database WHERE datdba=(SELECT oid FROM pg_roles WHERE rolname='$CI_LEASE_USER')) <> (CASE WHEN '$CI_LEASE_COMPANION' = '' THEN 1 ELSE 2 END)
+   OR (SELECT count(*) FROM pg_database WHERE datname IN ('$CI_LEASE_PRIMARY','$CI_LEASE_COMPANION') AND datdba=(SELECT oid FROM pg_roles WHERE rolname='$CI_LEASE_USER')) <> (CASE WHEN '$CI_LEASE_COMPANION' = '' THEN 1 ELSE 2 END)
   THEN RAISE EXCEPTION 'inconsistent lease'; END IF;
  ELSE
   IF EXISTS (SELECT FROM pg_database WHERE datname IN ('$CI_LEASE_PRIMARY','$CI_LEASE_COMPANION')) THEN RAISE EXCEPTION 'partial lease'; END IF;
@@ -53,14 +69,15 @@ BEGIN
  END IF;
 END \$lease\$;
 SELECT 'CREATE DATABASE $CI_LEASE_PRIMARY OWNER $CI_LEASE_USER' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='$CI_LEASE_PRIMARY') \gexec
-SELECT 'CREATE DATABASE $CI_LEASE_COMPANION OWNER $CI_LEASE_USER' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='$CI_LEASE_COMPANION') \gexec
+SELECT 'CREATE DATABASE $CI_LEASE_COMPANION OWNER $CI_LEASE_USER' WHERE '$CI_LEASE_COMPANION' <> '' AND NOT EXISTS (SELECT FROM pg_database WHERE datname='$CI_LEASE_COMPANION') \gexec
 DO \$lease\$ BEGIN
- IF (SELECT count(*) FROM pg_database WHERE datname IN ('$CI_LEASE_PRIMARY','$CI_LEASE_COMPANION') AND datdba=(SELECT oid FROM pg_roles WHERE rolname='$CI_LEASE_USER')) <> 2 THEN RAISE EXCEPTION 'inconsistent ownership'; END IF;
+ IF (SELECT count(*) FROM pg_database WHERE datname IN ('$CI_LEASE_PRIMARY','$CI_LEASE_COMPANION') AND datdba=(SELECT oid FROM pg_roles WHERE rolname='$CI_LEASE_USER')) <> (CASE WHEN '$CI_LEASE_COMPANION' = '' THEN 1 ELSE 2 END) THEN RAISE EXCEPTION 'inconsistent ownership'; END IF;
 END \$lease\$;
 SQL
 `
 const verifyLeaseScript = `# CI_LEASE_VERIFY
 for db in "$CI_DATABASE_NAME" "$CI_DATABASE_COMPANION_NAME"; do
+ [ -n "$db" ] || continue
  PGDATABASE="$db" psql -X -q -v ON_ERROR_STOP=1 -c 'SELECT 1' >/dev/null 2>&1 || exit 1
 done
 `

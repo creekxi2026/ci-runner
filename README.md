@@ -224,28 +224,36 @@ Run `ci-postgres` only in jobs that need a disposable database. In GitHub Action
 The fixed per-job request creates at most one bounded PostgreSQL companion with a generated password; repeated requests reuse it. The controller waits for readiness outside the janitor, adds only this database's TCP/5432 namespace allowance, and publishes configuration atomically. It never accepts arbitrary images, Docker commands or another job's database through the request. Without a request there is no database container, database environment or TCP/5432 allowance. Cleanup includes requested databases. A controller restart conservatively preserves ambiguous job claims until the original hard lifetime.
 
 `POSTGRES_DATABASE_PREFIX` defaults to empty, preserving the generic `ci` database
-and bootstrap-role behavior. A non-empty operator prefix enables a trusted
-controller-provisioned **pair**: `<prefix><24 lowercase hex>` and that primary name
-plus `_staging`, both owned by the same non-admin login role (`NOSUPERUSER`,
+and bootstrap-role behavior. A non-empty operator prefix provisions a database
+named `<prefix><24 lowercase hex>` with a non-admin login role (`NOSUPERUSER`,
 `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`, no role memberships).
+For named leases, `POSTGRES_COMPANION_SUFFIX` must be explicitly set:
+
+- `none`: provision only the primary database; `CI_DATABASE_COMPANION_NAME` is empty.
+- A suffix such as `_scratch`: also provision `<primary><suffix>` under the same
+  non-admin owner. At most two databases are permitted; jobs cannot request arbitrary names.
+
 Prefixes must start with a lowercase letter, contain only lowercase letters,
-digits or underscores, end in underscore and be at most 31 bytes, keeping both
-database identifiers within PostgreSQL's 63-byte limit. A private application
-fleet may configure `closet_ai_test_`; no application scripts are baked into images.
+digits or underscores, end in underscore and be at most 31 bytes. Suffixes start
+with underscore followed by lowercase letters, digits or underscores; the full
+name must fit PostgreSQL's 63-byte limit. For example, an operator can choose
+`POSTGRES_DATABASE_PREFIX=example_test_` and `POSTGRES_COMPANION_SUFFIX=_scratch`.
+A suffix without a prefix is rejected (empty or `none` is allowed).
+Application code and schema remain in consuming repositories.
 
 Names derive from the deployment/job identity; the login password derives with
 HMAC from bootstrap state preserved privately in the owned disposable cluster.
-Retries and controller recovery reuse the same pair/password. Changed prefixes,
+Retries and controller recovery reuse the same database names/password. Changed prefixes or companion suffixes,
 foreign container ownership, partial pairs, inconsistent ownership or elevated
 role privileges fail closed without publishing worker configuration or silently
 repairing state. Failed partial creation requires disposal of the job/cluster,
-not manual repair inside a running job. Do not change lease mode/prefix while jobs
+not manual repair inside a running job. Do not change lease mode/prefix/suffix while jobs
 are active. Cluster data is disposable, not a persistent recovery database.
 
 With a configured prefix workers receive **only the non-admin** credentials:
 `CI_DATABASE_NAME`, `CI_DATABASE_COMPANION_NAME`, `DATABASE_URL`,
 `CI_DATABASE_HOST`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`.
-Both databases are verified using that login before publishing the mode-0600
+Every selected database is verified using that login before publishing the mode-0600
 environment file atomically. Secrets use scoped Docker exec environment and SQL
 stdin, never process argv or stdout/logs. The privileged provisioning session
 also disables PostgreSQL statement/error/duration logging so rejected ownership
@@ -278,10 +286,36 @@ pool cache or access to the templates parent. Python is registered in each
 job's private Actions tool cache; the binaries and wheels stay read-only.
 
 Publish from an idle, explicitly reviewed CI cache with
-`profiles/cache/publish-seed.py --tools --source-volume ci-deps-linux-arm64-cache --image <verified-runner-digest> --provenance <review-reference>`.
-The publisher selects `tools/{python,bin,wheels,wechat}`, checks ownership and
-contained relative links, uses FICLONE where supported, hashes all files and
+`profiles/cache/publish-seed.py --tools --tool python --tool bin --tool wheels --source-volume ci-deps-linux-arm64-cache --image <verified-runner-digest> --provenance <review-reference>`.
+Select each required directory under `tools/` explicitly with repeatable `--tool`
+arguments. No directory names are mandatory; selections must be unique simple
+names, exist, and pass ownership and contained-relative-link checks. Unselected
+directories are excluded. The publisher uses FICLONE where supported, hashes all files and
 atomically publishes a separate immutable snapshot. Agent Runtime data is never
 read. A changed distribution requires a new seed; missing/invalid seeds fail
 job preparation. This caches installation assets, not live vulnerability feeds
 or arbitrary project dependencies. No automatic cleanup removes active seeds.
+
+### Migrating older tool/database configuration
+
+Existing immutable tool seeds remain readable without republishing. New tool
+publications require `--tool <directory>` for every selected directory; use the
+consumer's tool manifest or inventory of its existing seed to preserve its exact
+selection. Do not infer tool selection from the project name or copy credentials
+into a seed. `--tool` is valid only with `--tools`.
+
+Older controllers implicitly added `_staging` when a database prefix was set.
+Before upgrading such a deployment, explicitly add
+`POSTGRES_COMPANION_SUFFIX=_staging` to its private operator configuration to
+preserve its existing contract. Choose `none` only when the consumer supports a
+single database. Prefix-only configuration now fails startup with a migration
+hint instead of silently changing the number of databases. This historical
+suffix is a consumer choice, not the runner's default.
+
+Drain all jobs owned by the deployment before switching images and the matching
+Compose file. Retain its old image references, Compose file and private environment
+for rollback; rollback also requires a drained deployment. Old active named
+clusters lack the new suffix metadata and are rejected for provisioning by the
+new controller, so do not perform a hot switch with database jobs still active.
+The consumer's existing environment variable names and primary/companion naming
+remain unchanged when its former suffix is explicitly configured.

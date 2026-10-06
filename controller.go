@@ -73,6 +73,7 @@ type fleet struct {
 	proxyEnv                      []string
 	allowedEvents                 map[string]bool
 	databasePrefix                string
+	companionSuffix               string
 	cache                         *dependencyCache
 	seed, toolsSeed               string
 	work                          *sharedWork
@@ -358,7 +359,8 @@ func run() error {
 		return fmt.Errorf("dependency seed requires exact SHA256 and shared writable cache off")
 	}
 	prefix := os.Getenv("POSTGRES_DATABASE_PREFIX")
-	if err := validateDatabasePrefix(prefix); err != nil {
+	companionSuffix, err := databaseCompanionSuffix(prefix, os.Getenv("POSTGRES_COMPANION_SUFFIX"))
+	if err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -384,7 +386,7 @@ func run() error {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, databasePrefix: prefix, companionSuffix: companionSuffix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}

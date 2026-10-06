@@ -63,7 +63,7 @@ func TestLeaseSQLWithLocalPostgres(t *testing.T) {
 		return cmd.Run() == nil
 	}
 	t.Run("fresh-and-idempotent", func(t *testing.T) {
-		l := pairedLease("unit", "fresh", "closet_ai_test_", "fixture-bootstrap")
+		l := namedLease("unit", "fresh", "example_test_", "_scratch", "fixture-bootstrap")
 		if !provision(l) || !verify(l) || !provision(l) || !verify(l) {
 			t.Fatal("fresh/retry lease failed")
 		}
@@ -95,8 +95,30 @@ func TestLeaseSQLWithLocalPostgres(t *testing.T) {
 			t.Fatal("consistent lease rejected")
 		}
 	})
+	t.Run("single-and-configuration-changes", func(t *testing.T) {
+		l := namedLease("unit", "single", "example_test_", "", "fixture-bootstrap")
+		if !provision(l) || !verify(l) || !provision(l) {
+			t.Fatal("single lease failed")
+		}
+		if sql("SELECT count(*) FROM pg_database WHERE datdba=(SELECT oid FROM pg_roles WHERE rolname='"+l.user+"')") != "1" {
+			t.Fatal("single lease created extra databases")
+		}
+		pair := namedLease("unit", "single", "example_test_", "_scratch", "fixture-bootstrap")
+		if provision(pair) {
+			t.Fatal("silently changed single into pair")
+		}
+		existingPair := namedLease("unit", "fresh", "example_test_", "_scratch", "fixture-bootstrap")
+		existingPair.companion = ""
+		if provision(existingPair) {
+			t.Fatal("silently changed pair into single")
+		}
+		l.companion = l.name + "_other"
+		if provision(l) {
+			t.Fatal("silently added new companion")
+		}
+	})
 	t.Run("partial-pair", func(t *testing.T) {
-		l := pairedLease("unit", "partial", "closet_ai_test_", "fixture-bootstrap")
+		l := namedLease("unit", "partial", "example_test_", "_scratch", "fixture-bootstrap")
 		if !provision(l) {
 			t.Fatal("fixture lease failed")
 		}
@@ -106,7 +128,7 @@ func TestLeaseSQLWithLocalPostgres(t *testing.T) {
 		}
 	})
 	t.Run("foreign-owner", func(t *testing.T) {
-		l := pairedLease("unit", "foreign", "closet_ai_test_", "fixture-bootstrap")
+		l := namedLease("unit", "foreign", "example_test_", "_scratch", "fixture-bootstrap")
 		if !provision(l) {
 			t.Fatal("fixture lease failed")
 		}
@@ -116,7 +138,7 @@ func TestLeaseSQLWithLocalPostgres(t *testing.T) {
 		}
 	})
 	t.Run("existing-foreign-database", func(t *testing.T) {
-		l := pairedLease("unit", "preexisting", "closet_ai_test_", "fixture-bootstrap")
+		l := namedLease("unit", "preexisting", "example_test_", "_scratch", "fixture-bootstrap")
 		sql("CREATE DATABASE " + l.name)
 		if provision(l) {
 			t.Fatal("foreign preexisting database accepted")

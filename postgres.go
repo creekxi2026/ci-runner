@@ -102,7 +102,7 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 		}
 		pgEnv := []string{"POSTGRES_PASSWORD=" + password, "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}
 		if f.databasePrefix != "" {
-			pgEnv = append(pgEnv, "CI_DATABASE_PREFIX="+f.databasePrefix)
+			pgEnv = append(pgEnv, "CI_DATABASE_PREFIX="+f.databasePrefix, "CI_DATABASE_COMPANION_SUFFIX="+f.companionSuffix)
 		}
 		if f.createContext(ctx, n+"-pg", f.postgresImage(), "999", []string{"postgres"}, pgEnv, h, network) != nil {
 			return
@@ -118,13 +118,18 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 				password = strings.TrimPrefix(e, "POSTGRES_PASSWORD=")
 			}
 		}
-		storedPrefix := ""
+		storedPrefix, storedSuffix := "", ""
+		hasSuffix := false
 		for _, e := range pg.Config.Env {
 			if strings.HasPrefix(e, "CI_DATABASE_PREFIX=") {
 				storedPrefix = strings.TrimPrefix(e, "CI_DATABASE_PREFIX=")
 			}
+			if strings.HasPrefix(e, "CI_DATABASE_COMPANION_SUFFIX=") {
+				storedSuffix = strings.TrimPrefix(e, "CI_DATABASE_COMPANION_SUFFIX=")
+				hasSuffix = true
+			}
 		}
-		if storedPrefix != f.databasePrefix {
+		if storedPrefix != f.databasePrefix || storedSuffix != f.companionSuffix || (storedPrefix != "" && !hasSuffix) {
 			return
 		}
 		if len(password) != 48 {
@@ -156,7 +161,7 @@ func (f *fleet) provisionDatabaseContext(parent context.Context, n, network stri
 	}
 	var lease databaseLease
 	if f.databasePrefix != "" {
-		lease = pairedLease(f.owner, n, f.databasePrefix, password)
+		lease = namedLease(f.owner, n, f.databasePrefix, f.companionSuffix, password)
 		if !provisionLease(ctx, n, lease, database) {
 			return
 		}
