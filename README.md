@@ -298,6 +298,10 @@ or arbitrary project dependencies. No automatic cleanup removes active seeds.
 
 ### Migrating older tool/database configuration
 
+The [generic job services v1 contract](docs/service-contract-v1.md) defines the
+next controller/consumer boundary. It is an implementation target, not an API
+available in the current image; coordinate both sides before enabling it.
+
 Existing immutable tool seeds remain readable without republishing. New tool
 publications require `--tool <directory>` for every selected directory; use the
 consumer's tool manifest or inventory of its existing seed to preserve its exact
