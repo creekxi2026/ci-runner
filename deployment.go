@@ -13,15 +13,13 @@ var imageRevision string
 var digestReference = regexp.MustCompile(`^[a-zA-Z0-9_./:-]+@sha256:[a-f0-9]{64}$`)
 var sourceRevision = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
-const defaultPostgresImage = "postgres:17-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652"
-
 func deploymentImages(ctx context.Context) (string, string, error) {
 	revision := os.Getenv("IMAGE_REVISION")
 	if !sourceRevision.MatchString(revision) || revision != imageRevision {
 		return "", "", fmt.Errorf("IMAGE_REVISION must match this cloud-built controller")
 	}
-	runner, postgres := os.Getenv("RUNNER_IMAGE"), os.Getenv("POSTGRES_IMAGE")
-	for _, ref := range []string{runner, postgres} {
+	runner, controller := os.Getenv("RUNNER_IMAGE"), os.Getenv("CONTROLLER_IMAGE")
+	for _, ref := range []string{runner, controller} {
 		if !digestReference.MatchString(ref) {
 			return "", "", fmt.Errorf("workload images must be digest pinned")
 		}
@@ -35,16 +33,28 @@ func deploymentImages(ctx context.Context) (string, string, error) {
 		if image.Architecture != "arm64" || image.Os != "linux" {
 			return "", "", fmt.Errorf("workload image is not Linux ARM64")
 		}
-		if ref == runner && image.Config.Labels["org.opencontainers.image.revision"] != revision {
-			return "", "", fmt.Errorf("runner image revision does not match controller")
+		if image.Config.Labels["org.opencontainers.image.revision"] != revision {
+			return "", "", fmt.Errorf("image revision does not match controller")
 		}
 	}
-	return runner, postgres, nil
+	return runner, controller, nil
 }
 
-func (f *fleet) postgresImage() string {
-	if f.pgImage != "" {
-		return f.pgImage
+func verifyControllerImage(ctx context.Context, ref string) error {
+	name := os.Getenv("CONTROLLER_CONTAINER")
+	if name == "" {
+		return fmt.Errorf("CONTROLLER_CONTAINER required")
 	}
-	return defaultPostgresImage
+	var actual struct{ Image string }
+	var selected struct{ ID string }
+	if e := dockerContext(ctx, "GET", "/containers/"+url.PathEscape(name)+"/json", nil, &actual); e != nil {
+		return e
+	}
+	if e := dockerContext(ctx, "GET", "/images/"+url.PathEscape(ref)+"/json", nil, &selected); e != nil {
+		return e
+	}
+	if selected.ID == "" || actual.Image != selected.ID {
+		return fmt.Errorf("controller fingerprint image does not match running image")
+	}
+	return nil
 }

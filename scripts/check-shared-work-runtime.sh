@@ -2,7 +2,6 @@
 # Isolated lifecycle fixture, never a production cache or workspace.
 set -euo pipefail
 runner_ref=$1
-postgres_ref=$2
 fixture="ci-work-check-$(date +%s)-$$"
 test_dir=$(mktemp -d)
 cleanup() {
@@ -25,5 +24,5 @@ docker run --rm --name "$fixture" --label com.docker.compose.project=ci-validati
   --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
   --mount "type=bind,src=$test_dir/check,dst=/test,readonly" \
   -e "CI_WORK_TEST_OWNER_PREFIX=$fixture" -e CI_WORK_TEST_ROOT=/work -e "CI_WORK_TEST_VOLUME=$fixture" \
-  -e "CI_DISK_INTEGRATION_IMAGE=$runner_ref" -e "CI_DISK_INTEGRATION_POSTGRES=$postgres_ref" \
+  -e "CI_DISK_INTEGRATION_IMAGE=$runner_ref" \
   --entrypoint /test "$runner_ref" -test.run='^TestSharedWorkRuntime$' -test.v -test.timeout=120s

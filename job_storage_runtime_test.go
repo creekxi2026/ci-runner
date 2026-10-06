@@ -50,7 +50,6 @@ test ! -e /var/run/docker.sock
 printf private > /home/runner/other-job
 printf '#!/bin/sh\nexit 0\n' > /tmp/executable; chmod +x /tmp/executable; /tmp/executable
 test ! -e /job-disk
-test ! -e /postgres
 test ! -e /opt/ci-cache`
 		if i == 0 {
 			// Allocate more than the previous 2 GiB HOME ceiling while the
@@ -59,26 +58,6 @@ test ! -e /opt/ci-cache`
 		}
 		if code, err := execCode(ctx, n, "1001", []string{"sh", "-ec", script}); err != nil || code != 0 {
 			t.Fatalf("private disk check: code=%d error=%v", code, err)
-		}
-	}
-	if pgImage := os.Getenv("CI_DISK_INTEGRATION_POSTGRES"); pgImage != "" {
-		n := names[0]
-		h := secure()
-		h["ReadonlyRootfs"] = true
-		h["Memory"] = 512 * 1024 * 1024
-		h["MemorySwap"] = h["Memory"]
-		h["Mounts"] = []obj{jobDiskMount(n, "postgres", "/var/lib/postgresql/data"), jobDiskMount(n, "postgres-run", "/var/run/postgresql")}
-		env := []string{"POSTGRES_PASSWORD=local-fixture-only", "POSTGRES_DB=ci", "PGDATA=/var/lib/postgresql/data/pgdata"}
-		if err := f.createContext(ctx, n+"-pg", pgImage, "999", []string{"postgres"}, env, h, "none"); err != nil {
-			t.Fatal(err)
-		}
-		script := `for i in $(seq 1 50); do pg_isready -h 127.0.0.1 -U postgres && break; sleep 0.2; done
-test "$(stat -f -c %T /var/lib/postgresql/data)" != tmpfs
-test ! -e /home/runner/other-job
-psql -U postgres -d ci -v ON_ERROR_STOP=1 -c 'CREATE TABLE disk_test (n int); INSERT INTO disk_test VALUES (1);'
-test "$(psql -U postgres -d ci -Atc 'SELECT count(*) FROM disk_test')" = 1`
-		if code, err := execCode(ctx, n+"-pg", "999", []string{"sh", "-ec", script}); err != nil || code != 0 {
-			t.Fatalf("PostgreSQL disk check: code=%d error=%v", code, err)
 		}
 	}
 	// A controller restart must preserve both live runners and their disk volumes.

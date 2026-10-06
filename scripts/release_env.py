@@ -6,7 +6,7 @@ import re
 import sys
 
 
-TARGETS = ("controller", "runner", "postgres")
+TARGETS = ("controller", "runner")
 
 
 def image_refs(repository, revision, metadata):
@@ -28,7 +28,7 @@ def render(repository, revision, metadata):
     refs = image_refs(repository, revision, metadata)
     template = (pathlib.Path(__file__).resolve().parents[1] / ".env.example").read_text()
     replacements = {"CONTROLLER_IMAGE": refs["controller"], "RUNNER_IMAGE": refs["runner"],
-                    "IMAGE_REVISION": revision, "POSTGRES_IMAGE": refs["postgres"]}
+                    "IMAGE_REVISION": revision}
     lines = []
     for line in template.splitlines():
         key = line.partition("=")[0]

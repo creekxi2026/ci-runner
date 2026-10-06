@@ -111,26 +111,7 @@ func TestSharedWorkRuntime(t *testing.T) {
 	if e := fleets[1].start(ctx); !errors.Is(e, errCapacity) {
 		t.Fatalf("self-test pool exceeded one: %v", e)
 	}
-	if pg := os.Getenv("CI_DISK_INTEGRATION_POSTGRES"); pg != "" {
-		f := fleets[0]
-		n := names[0]
-		h := secure()
-		h["ReadonlyRootfs"] = true
-		h["Memory"] = 512 * 1024 * 1024
-		h["MemorySwap"] = h["Memory"]
-		h["Mounts"] = []obj{f.diskMount(n, "postgres", "/var/lib/postgresql/data"), f.diskMount(n, "postgres-run", "/var/run/postgresql")}
-		if e := f.createContext(ctx, n+"-pg", pg, "999", []string{"postgres"}, []string{"POSTGRES_PASSWORD=fixture-only", "POSTGRES_DB=ci"}, h, "none"); e != nil {
-			t.Fatal(e)
-		}
-		script := `for i in $(seq 1 50); do pg_isready -h 127.0.0.1 -U postgres && break; sleep .2; done
- test "$(stat -f -c %T /var/lib/postgresql/data)" != tmpfs
- psql -h 127.0.0.1 -U postgres -d ci -v ON_ERROR_STOP=1 -c 'create table isolated(n int); insert into isolated values(1);'
- test "$(psql -h 127.0.0.1 -U postgres -d ci -Atc 'select count(*) from isolated')" = 1`
-		if code, e := execCode(ctx, n+"-pg", "999", []string{"sh", "-ec", script}); e != nil || code != 0 {
-			t.Fatalf("PG: %d %v", code, e)
-		}
-	}
-	// Restart discovery preserves each deployment's live jobs, including PG.
+	// Restart discovery preserves each deployment's live jobs.
 	recovered := &fleet{owner: owners[0], work: fleets[0].work}
 	if e := recovered.recover(); e != nil {
 		t.Fatal(e)
@@ -180,5 +161,5 @@ func TestSharedWorkRuntime(t *testing.T) {
 	if _, e := f.work.root.Stat("schema"); e != nil {
 		t.Fatal("shared volume removed")
 	}
-	t.Log("two pools: independent three and one, shared disk subpaths, worker/PG isolation, grouping, live restart, orphan cleanup, reusable slots passed")
+	t.Log("two pools: independent three and one, shared disk subpaths, worker isolation, grouping, live restart, orphan cleanup, reusable slots passed")
 }

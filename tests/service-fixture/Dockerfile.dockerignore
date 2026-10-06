@@ -1,0 +1,8 @@
+*
+!tests/
+!tests/service-fixture/
+!tests/service-fixture/**
+!service-firewall.sh
+!firewall.sh
+!job-disk-init.py
+!ci-service.py

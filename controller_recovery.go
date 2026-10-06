@@ -26,7 +26,7 @@ type jobState struct {
 	busy, cleaning, provisioning bool
 	resources                    []string
 	recovered                    bool
-	databaseReady                bool
+	services                     map[string]*serviceTask
 	gate                         bool
 	disk                         bool
 	shared                       bool
@@ -38,6 +38,9 @@ type messageProgress struct {
 }
 
 func jobName(n string) string {
+	if job := genericServiceJob(n); job != "" {
+		return job
+	}
 	for _, suffix := range []string{"-proxy", "-pg", "-fw", "-net"} {
 		n = strings.TrimSuffix(n, suffix)
 	}
@@ -79,8 +82,9 @@ func (f *fleet) snapshot() map[string]string {
 func (f *fleet) api() (runnerAPI, int) { f.mu.Lock(); defer f.mu.Unlock(); return f.client, f.set }
 
 // Caller holds only this job's mutex. Keep the runner and companions together
-// if removing the runner fails; never tear its database out from under it.
+// if removing the runner fails; never tear its services out from under it.
 func (f *fleet) cleanJob(n, network string, j *jobState) {
+	f.cancelServices(j)
 	resources := []string{n, n + "-fw", n + "-pg", n + "-proxy"}
 	if j.recovered {
 		resources = j.resources
@@ -95,6 +99,9 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 		if err := docker("DELETE", "/containers/"+r+"?force=true&v=true", nil, nil); err != nil {
 			return
 		}
+	}
+	if err := f.removeServices(n); err != nil {
+		return
 	}
 	if j.disk {
 		if err := f.removeJobDisk(n); err != nil {
@@ -337,6 +344,11 @@ func (f *fleet) recover() error {
 		}
 	}
 	for n, j := range groups {
+		if f.services != nil && j.shared {
+			if _, err := f.readServiceIndex(n); err != nil {
+				j.cleaning = true
+			}
+		}
 		found := false
 		// Always delete the runner before any companions, including after partial cleanup.
 		for i, r := range j.resources {
@@ -378,12 +390,27 @@ func (f *fleet) recover() error {
 func (f *fleet) maintain(ctx context.Context, interval time.Duration) {
 	workers, cancel := context.WithCancel(ctx)
 	var pending sync.WaitGroup
-	defer func() { cancel(); pending.Wait() }()
+	defer func() {
+		cancel()
+		pending.Wait()
+		for n := range f.snapshot() {
+			if j := f.state(n); j != nil {
+				j.mu.Lock()
+				f.cancelServices(j)
+				j.mu.Unlock()
+			}
+		}
+	}()
 	for {
 		f.reap()
-		for n, network := range f.snapshot() {
+		for n := range f.snapshot() {
 			pending.Add(1)
-			go func() { defer pending.Done(); f.provisionDatabaseContext(workers, n, network) }()
+			go func() {
+				defer pending.Done()
+				if f.services != nil {
+					f.pollServices(workers, n)
+				}
+			}()
 		}
 		if !pause(ctx, interval) {
 			return

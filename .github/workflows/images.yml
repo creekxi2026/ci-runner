@@ -37,7 +37,7 @@ jobs:
           printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           trap 'docker logout ghcr.io' EXIT
           docker buildx create --driver docker-container --use
-          for target in controller runner postgres; do
+          for target in controller runner; do
             docker buildx build --platform linux/arm64 --provenance=false --target "$target" \
               --build-arg SOURCE_REVISION="$GITHUB_SHA" \
               --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
@@ -63,14 +63,13 @@ jobs:
               test ! -w /usr/local/bin/node
             '
           # Exercise the new image through the real controller's disk provisioner.
-          postgres_ref="$(python3 -c 'import json; m=json.load(open("deployment/postgres.json")); print(m["image.name"]+"@"+m["containerimage.digest"])')"
-          docker pull "$postgres_ref"
-          CI_DISK_INTEGRATION_IMAGE="$runner_ref" CI_DISK_INTEGRATION_POSTGRES="$postgres_ref" \
-            go test -run '^TestJobDiskRuntime$' -v
-          bash scripts/check-shared-work-runtime.sh "$runner_ref" "$postgres_ref"
+          CI_DISK_INTEGRATION_IMAGE="$runner_ref" go test -run '^TestJobDiskRuntime$' -v
+          bash scripts/check-shared-work-runtime.sh "$runner_ref"
+          bash scripts/check-service-runtime.sh "$runner_ref"
           python3 scripts/promote_latest.py "$GITHUB_REPOSITORY" "$GITHUB_SHA" deployment
           python3 scripts/release_env.py "$GITHUB_REPOSITORY" "$GITHUB_SHA" deployment
           cp compose.yaml deployment/compose.yaml
+          cp -R examples/services deployment/services
       # Artifact creation selects the coherent deployment after all latest promotions.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:

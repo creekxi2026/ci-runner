@@ -2,10 +2,10 @@
 
 This is the runner-side confirmed implementation contract for RUIF-15 and its
 RUIF-13 consumer, incorporating the consumer's requested boundaries.
-It is **not implemented or enabled by the current release**. The existing
-controller stays operational until both sides pass the migration checks below.
-The parameterized database API in this draft PR is an intermediate change, not
-the final service API. New controller code must not interpret database names,
+The implementation on this draft branch is not yet deployed. The existing
+controller stays operational until both sides pass migration acceptance. The
+previous parameterized database API has been removed from the new core.
+The controller must not interpret database names,
 SQL, framework/tool names, or application environment variables.
 
 ## Catalog and trust
@@ -165,6 +165,10 @@ absolute file path). Every field is required; the check receives an empty
 `/outputs/consumer.json`. The service can receive explicitly declared bootstrap
 files; neither worker nor check receives them. `check` mounts `/outputs` read-only
 and verifies the actual consumer credentials/behavior against its own instance.
+The private adapter output stays UID 0 (mode 0400 recommended); adapters must not
+chown it to the worker UID. Both adapter phases run as UID 0 with all capabilities
+dropped. Only the controller copies a validated result into the worker publication
+tree as UID 1001 mode 0400. Internal and worker-visible output files are distinct.
 Success requires both exits to be zero, valid output, and ownership validation.
 Adapters get no Docker socket, host paths, other job mounts, privileged mode or
 controller/GitHub/cloud credentials. Their stdout/stderr are not forwarded to
@@ -231,3 +235,33 @@ fingerprints and changed-input/old-receipt rejection. Use a non-database dummy
 service for generic runner tests. Then drain, retain rollback config/images,
 switch the reviewed catalog/adapter/controller/consumer together, and confirm a
 real project database job. Staging/production persistent databases are untouched.
+
+## Operator policy and current implementation
+
+`SERVICES_CATALOG_FILE` and `SERVICES_POLICY_FILE` point to root-owned, non-group/
+world-writable files in a controller-only read-only mount. Policy has exactly
+`version: 1`, `max_services` (0..4), `max_resources` (the same five resource fields),
+`storage_targets` (exact allowlist), and `trust_revision` (reviewed policy revision).
+The canonical resolved policy digest also binds the network, output, tmpfs and
+adapter isolation revisions and resource-sharing rule. See `examples/services`
+for an empty deployment; each consuming project owns its populated catalog.
+
+Limits bound the aggregate server/adapter/helper budget: server 12/16, adapter
+2/16, namespace 1/16, firewall 1/16. Only one init/check runs at a time; all stages
+share the persisted startup deadline. Minimum memory is 256 MiB, CPU 160 millis,
+PIDs 64 and data 4096 bytes. Data targets split the declared tmpfs capacity;
+container `/run` and `/tmp` each have 16 MiB caps charged to the memory budget.
+Adapters have private disk scratch for their one output; the trusted adapter is
+responsible for keeping scratch bounded, while publication rejects outputs over
+64 KiB. Service-declared anonymous Docker volumes not covered by catalog storage,
+and all adapter-declared anonymous volumes, are rejected.
+
+In v1 the service/init/check containers share a dedicated network namespace
+behind a firewall installed before application startup. Each has its own root
+filesystem and PID namespace. The namespace exposes only declared ports to the
+requesting worker, cannot initiate host/sibling/public traffic, and blocks Docker
+embedded DNS. The image entrypoint may use limited filesystem/UID capabilities
+to drop privilege; it never gets NET_ADMIN. Init/check have all capabilities
+removed. No service restart policy is installed: stopped tmpfs services fail
+closed instead of resetting data under the same lease. Controller recovery
+preserves a live instance and rejects changed configuration/ownership.

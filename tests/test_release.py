@@ -16,13 +16,13 @@ class ReleaseEnvironment(unittest.TestCase):
     def test_complete_pair_is_digest_pinned(self):
         module = self.module()
         meta = {name: {"containerimage.digest": "sha256:" + char * 64}
-                for name, char in (("controller", "a"), ("runner", "b"), ("postgres", "d"))}
+                for name, char in (("controller", "a"), ("runner", "b"))}
         result = module.render("creekxi2026/ci-runner", "c" * 40, meta)
         self.assertIn("CONTROLLER_IMAGE=ghcr.io/creekxi2026/ci-runner-controller@sha256:" + "a" * 64, result)
         self.assertIn("RUNNER_IMAGE=ghcr.io/creekxi2026/ci-runner-runner@sha256:" + "b" * 64, result)
         self.assertNotIn(":controller\n", result)
         self.assertIn("IMAGE_REVISION=" + "c" * 40, result)
-        self.assertIn("POSTGRES_IMAGE=ghcr.io/creekxi2026/ci-runner-postgres@sha256:" + "d" * 64, result)
+        self.assertNotIn("POSTGRES_IMAGE=", result)
 
     def test_partial_publication_cannot_produce_deployment(self):
         module = self.module()
@@ -56,7 +56,7 @@ class LatestPromotion(unittest.TestCase):
     def test_invalid_input_never_starts_any_promotion(self):
         module = self.module()
         valid = {name: {"containerimage.digest": "sha256:" + "a" * 64}
-                 for name in ("controller", "runner", "postgres")}
+                 for name in ("controller", "runner")}
         cases = [("OWNER/repo", "c" * 40, valid), ("owner/repo", "main", valid)]
         for target in valid:
             for bad in (None, {}, [], "not an object", {"containerimage.digest": None},
@@ -76,15 +76,15 @@ class LatestPromotion(unittest.TestCase):
                                    run=lambda *args, **kwargs: calls.append(args))
                 self.assertEqual(calls, [])
 
-    def test_promotes_only_latest_from_three_role_digests(self):
+    def test_promotes_only_latest_from_two_role_digests(self):
         module = self.module()
         meta = {name: {"containerimage.digest": "sha256:" + char * 64}
-                for name, char in (("controller", "a"), ("runner", "b"), ("postgres", "d"))}
+                for name, char in (("controller", "a"), ("runner", "b"))}
         calls = []
         module.promote("creekxi2026/ci-runner", "c" * 40, meta,
                        run=lambda command, **kwargs: calls.append((command, kwargs)))
         expected = []
-        for target, char in (("controller", "a"), ("runner", "b"), ("postgres", "d")):
+        for target, char in (("controller", "a"), ("runner", "b")):
             package = f"ghcr.io/creekxi2026/ci-runner-{target}"
             expected.append((["docker", "buildx", "imagetools", "create", "--prefer-index=false",
                               "--tag", package + ":latest", package + "@sha256:" + char * 64],
@@ -97,12 +97,12 @@ class PublicationPolicy(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/images.yml").read_text()
         builder = workflow.index('docker buildx create --driver docker-container --use') if 'docker buildx create --driver docker-container --use' in workflow else -1
         self.assertGreaterEqual(builder, 0, 'digest-only pushes are unsupported by the default docker driver')
-        self.assertLess(builder, workflow.index('for target in controller runner postgres; do'))
+        self.assertLess(builder, workflow.index('for target in controller runner; do'))
 
     def test_serialized_digest_candidates_precede_latest_and_artifact(self):
         workflow = (ROOT / ".github/workflows/images.yml").read_text()
         self.assertIn("concurrency:\n  group: ghcr-publication\n  cancel-in-progress: false", workflow)
-        candidate = workflow.split("for target in controller runner postgres; do", 1)[1].split("done", 1)[0]
+        candidate = workflow.split("for target in controller runner; do", 1)[1].split("done", 1)[0]
         self.assertIn('--output "type=image,name=ghcr.io/$GITHUB_REPOSITORY-$target,push-by-digest=true,name-canonical=true,push=true"', candidate)
         self.assertNotIn("--tag", candidate)
         self.assertNotIn("--push", candidate)

@@ -228,7 +228,7 @@ func (s *sharedWork) prepare(n string) error {
 		name string
 		uid  int
 		mode os.FileMode
-	}{{"home", 1001, 0700}, {"tmp", 1001, 01777}, {"postgres", 999, 0700}, {"postgres-run", 999, 0700}} {
+	}{{"home", 1001, 0700}, {"tmp", 1001, 01777}} {
 		p := "jobs/" + n + "/" + d.name
 		if e := s.root.Mkdir(p, 0700); e != nil {
 			return e

@@ -65,28 +65,27 @@ func dockerContext(ctx context.Context, method, path string, body any, out any) 
 
 type obj = map[string]any
 type fleet struct {
-	mu                            sync.Mutex
-	client                        runnerAPI
-	session                       listener.Client
-	set                           int
-	image, pgImage, netout, owner string
-	proxyEnv                      []string
-	allowedEvents                 map[string]bool
-	databasePrefix                string
-	companionSuffix               string
-	cache                         *dependencyCache
-	seed, toolsSeed               string
-	work                          *sharedWork
-	jobs                          map[string]string
-	scaleMu                       sync.Mutex
-	maxJobs                       int
-	states                        map[string]*jobState
-	messages                      map[int]*messageProgress
-	idle, lifetime                time.Duration
-	stopping                      bool
-	unregister                    bool
-	demandSource                  func(context.Context) (int, error)
-	changes                       chan struct{}
+	mu                   sync.Mutex
+	client               runnerAPI
+	session              listener.Client
+	set                  int
+	image, netout, owner string
+	proxyEnv             []string
+	allowedEvents        map[string]bool
+	services             *serviceManager
+	cache                *dependencyCache
+	seed, toolsSeed      string
+	work                 *sharedWork
+	jobs                 map[string]string
+	scaleMu              sync.Mutex
+	maxJobs              int
+	states               map[string]*jobState
+	messages             map[int]*messageProgress
+	idle, lifetime       time.Duration
+	stopping             bool
+	unregister           bool
+	demandSource         func(context.Context) (int, error)
+	changes              chan struct{}
 }
 
 func (f *fleet) labels() obj { return obj{"ci-runner.owner": f.owner} }
@@ -194,13 +193,19 @@ func (f *fleet) start(ctx context.Context) (err error) {
 		return err
 	}
 	proxyURL := "http://" + proxy + ":3128"
-	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1", "CI_RUNNER_IMAGE=" + f.image, "CI_TOOLS_SEED=" + f.toolsSeed, "CI_POSTGRES_IMAGE=" + f.postgresImage()}
+	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1", "CI_RUNNER_IMAGE=" + f.image, "CI_TOOLS_SEED=" + f.toolsSeed}
 	h := secure()
 	h["Memory"] = 4 * 1024 * 1024 * 1024
 	h["MemorySwap"] = h["Memory"]
 	h["ReadonlyRootfs"] = true
 	if err = f.prepareJobDisk(ctx, name, h); err != nil {
 		return err
+	}
+	if f.services != nil {
+		if _, err = f.prepareServices(name, h); err != nil {
+			return err
+		}
+		env = append(env, "CI_SERVICES_FILE="+serviceMount+"/index.json", "CI_SERVICES_FINGERPRINT="+f.services.Fingerprint)
 	}
 	if err = f.prepareWorkspace(ctx, name); err != nil {
 		return err
@@ -358,11 +363,6 @@ func run() error {
 	if seed != "" && (cache != nil || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(seed)) {
 		return fmt.Errorf("dependency seed requires exact SHA256 and shared writable cache off")
 	}
-	prefix := os.Getenv("POSTGRES_DATABASE_PREFIX")
-	companionSuffix, err := databaseCompanionSuffix(prefix, os.Getenv("POSTGRES_COMPANION_SUFFIX"))
-	if err != nil {
-		return err
-	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	token, err := os.ReadFile("/run/secrets/github_token")
@@ -373,8 +373,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	runnerImage, postgresImage, err := deploymentImages(ctx)
+	runnerImage, controllerImage, err := deploymentImages(ctx)
 	if err != nil {
+		return err
+	}
+	if err = verifyControllerImage(ctx, controllerImage); err != nil {
 		return err
 	}
 	proxyEnv, err := upstreamProxyEnv(os.Getenv("PUBLIC_EGRESS_UPSTREAM_PROXY"))
@@ -386,9 +389,13 @@ func run() error {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, databasePrefix: prefix, companionSuffix: companionSuffix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, proxyEnv: proxyEnv, image: runnerImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
+	}
+	f.services, err = loadServices(ctx, os.Getenv("SERVICES_CATALOG_FILE"), os.Getenv("SERVICES_POLICY_FILE"), controllerImage, runnerImage, toolsSeed, seed)
+	if err != nil {
+		return err
 	}
 	f.idle, f.lifetime, err = timeoutConfig()
 	if err != nil {

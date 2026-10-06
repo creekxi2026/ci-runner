@@ -12,8 +12,7 @@ def initialize(root):
     usage = os.statvfs(root)
     if usage.f_bavail * usage.f_frsize < 5 * 1024**3:
         raise ValueError('Less than 5 GiB free on the job disk filesystem')
-    for name, uid, mode in [('home', 1001, 0o700), ('tmp', 1001, 0o1777),
-                            ('postgres', 999, 0o700), ('postgres-run', 999, 0o700)]:
+    for name, uid, mode in [('home', 1001, 0o700), ('tmp', 1001, 0o1777)]:
         p = root / name
         p.mkdir(mode=mode)
         os.chown(p, uid, uid)
