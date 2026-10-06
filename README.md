@@ -255,6 +255,19 @@ Run `bash scripts/check-service-runtime.sh <local-runner-digest>` for isolated
 Docker acceptance with a dummy TCP service; it creates and removes only fixture
 resources. Project database semantics are tested in the consuming repository.
 
+For a real project consumer, run
+`bash scripts/check-service-consumer-runtime.sh <local-base-digest> <fixture-dir>`.
+The external fixture contains `catalog.json`, `policy.json`, and `probe.py` plus
+its project validation dependencies. The base image must already contain the
+required interpreter/libraries; no package installation or download runs in the
+test. The probe accepts `route`, `acquire`, `isolation <other-service-IP>` and
+`recover` modes, returning nonzero on any invalid state and never printing secrets.
+The harness exercises real image/catalog admission, computes the fingerprint,
+starts two private jobs, serves their CLI requests through the normal maintenance
+loop, and checks recovery/cancellation/cleanup. Docker-generated local manifest
+references are required; these are local test artifacts, not registry releases.
+Project source and SQL are fixture inputs and are never added to this repository.
+
 ## Updates and development
 
 Download a new successful deployment artifact. Update the existing `.env` **image digest pair, source revision and PostgreSQL digest**, preserving private settings and credentials. Pull all selected images before `docker compose up -d`; do not replace `.env` wholesale with a generic template. Runner automatic updates are enabled separately from image/toolchain publishing.
