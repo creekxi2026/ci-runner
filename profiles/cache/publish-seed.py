@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Publish an immutable dependency snapshot from an explicitly reviewed idle CI cache.
 
-Never reads Agent Runtime storage. No credentials, worktrees or node_modules are
-selected: only npm _cacache, Go module cache and the exact Go build namespace.
+Never reads Agent Runtime storage. No credentials or application worktrees are
+selected: npm/Go caches by default, or reviewed immutable distributions with --tools.
 """
 import argparse
 import json
@@ -21,9 +21,12 @@ def main():
     p.add_argument('--source-volume', required=True)
     p.add_argument('--work-volume', default='ci-work-linux-arm64')
     p.add_argument('--image', required=True, help='Verified local runner image with workspace initializer')
-    p.add_argument('--go-namespace', required=True)
+    p.add_argument('--go-namespace')
+    p.add_argument('--tools', action='store_true', help='Publish only immutable reviewed tool distributions')
     p.add_argument('--provenance', required=True, help='Reviewed revision/lock digests and why this source is trusted')
     args = p.parse_args()
+    if not args.tools and not args.go_namespace:
+        raise ValueError("Go namespace required for dependency publication")
     for name in [args.source_volume, args.work_volume]:
         if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{1,127}', name):
             raise ValueError('invalid volume name')
@@ -45,8 +48,12 @@ def main():
            '--security-opt', 'no-new-privileges', '--memory', '512m', '--memory-swap', '512m', '--cpus', '1',
            '--mount', f'type=volume,src={args.work_volume},dst=/templates,volume-subpath=templates,volume-nocopy',
            '--mount', f'type=volume,src={args.source_volume},dst=/source,readonly,volume-subpath=data,volume-nocopy',
-           '--entrypoint', 'python3', args.image, '/opt/ci/workspace-init.py', 'import',
-           '--go-namespace', args.go_namespace, '--provenance', args.provenance]
+           '--entrypoint', 'python3', args.image]
+    if args.tools:
+        cmd += ['/opt/ci/tools-init.py', '--provenance', args.provenance]
+    else:
+        cmd += ['/opt/ci/workspace-init.py', 'import', '--go-namespace', args.go_namespace,
+                '--provenance', args.provenance]
     try:
         subprocess.run(cmd, check=True, timeout=600)
     finally:

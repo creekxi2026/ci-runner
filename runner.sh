@@ -9,12 +9,19 @@ done
 if [ ! -f /home/runner/.ci-workspace-ready ]; then
  cp -a /opt/actions-runner/. /home/runner/
 fi
+# Optional immutable tools are also available to mixed-event jobs.
+if [ -d /opt/ci-tools/python/lib ]; then
+ export LD_LIBRARY_PATH="/opt/ci-tools/python/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 # Controller and standalone jobs use one cache layout and environment setup.
 if [ "${CI_DEPENDENCY_CACHE:-}" = 1 ]; then
  . /opt/ci/cache-env.sh
 else
  export RUNNER_TOOL_CACHE=/home/runner/_work/_tool
  /opt/ci/toolcache-init.sh "$RUNNER_TOOL_CACHE"
+ if [ -d /opt/ci-tools/python ]; then
+  /opt/ci/cache-toolcache-init.sh "$RUNNER_TOOL_CACHE"
+ fi
 fi
 # Atomic assignment gate shared with the controller's idle cancellation check.
 # Job-writable metadata is advisory only; the controller enforces lifetime.

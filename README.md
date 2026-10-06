@@ -265,3 +265,20 @@ python3 -m unittest discover -s tests -v
 ```
 
 Dependabot update-generation should use GitHub-hosted runners, not this ARM fleet: its self-hosted requirements specify Linux x64 and Docker. Keep product PR/security checks and their triggers intact.
+
+### Read-only tools for mixed-event pools
+
+`TOOLS_SEED=<sha256>` mounts an administrator-published tool distribution at
+`/opt/ci-tools` from `ci-work-linux-arm64/templates/tools/<sha256>/files`.
+It requires `DEPENDENCY_CACHE_MODE=off`: jobs never receive the writable manual
+pool cache or access to the templates parent. Python is registered in each
+job's private Actions tool cache; the binaries and wheels stay read-only.
+
+Publish from an idle, explicitly reviewed CI cache with
+`profiles/cache/publish-seed.py --tools --source-volume ci-deps-linux-arm64-cache --image <verified-runner-digest> --provenance <review-reference>`.
+The publisher selects `tools/{python,bin,wheels,wechat}`, checks ownership and
+contained relative links, uses FICLONE where supported, hashes all files and
+atomically publishes a separate immutable snapshot. Agent Runtime data is never
+read. A changed distribution requires a new seed; missing/invalid seeds fail
+job preparation. This caches installation assets, not live vulnerability feeds
+or arbitrary project dependencies. No automatic cleanup removes active seeds.
