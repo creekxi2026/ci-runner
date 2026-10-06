@@ -16,78 +16,83 @@ func TestAdmissionProcess(t *testing.T) {
 	if p == "" {
 		return
 	}
+	limit, err := poolJobLimit(os.Getenv("CI_ADMISSION_TEST_LIMIT"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	owner := os.Getenv("CI_ADMISSION_TEST_OWNER")
-	s, e := openSharedWork(p, "fixture", owner)
-	if e != nil {
-		t.Fatal(e)
+	s, err := openSharedWork(p, "fixture", owner, limit)
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer s.Close()
-	e = s.reserve(os.Getenv("CI_ADMISSION_TEST_JOB"), false)
-	if errors.Is(e, errCapacity) {
-		os.Exit(42)
-	}
-	if e != nil {
-		t.Fatal(e)
-	}
-}
-func TestGlobalAdmissionAcrossProcesses(t *testing.T) {
-	p := t.TempDir()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	accepted := 0
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 24; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			c := exec.Command(os.Args[0], "-test.run=^TestAdmissionProcess$")
-			c.Env = append(os.Environ(), "CI_ADMISSION_TEST_ROOT="+p, fmt.Sprintf("CI_ADMISSION_TEST_OWNER=pool-%d", i), fmt.Sprintf("CI_ADMISSION_TEST_JOB=ci-job-%08x-000", i))
-			out, e := c.CombinedOutput()
-			if e == nil {
+			err := s.reserve(fmt.Sprintf("ci-job-%08x-000", i), false)
+			if err == nil {
 				mu.Lock()
 				accepted++
 				mu.Unlock()
-				return
-			}
-			var exit *exec.ExitError
-			if !errors.As(e, &exit) || exit.ExitCode() != 42 {
-				t.Errorf("child: %v %s", e, out)
+			} else if !errors.Is(err, errCapacity) {
+				t.Errorf("reserve: %v", err)
 			}
 		}(i)
 	}
 	wg.Wait()
-	if accepted != 3 {
-		t.Fatalf("accepted %d, want exactly 3 globally", accepted)
+	if os.Getenv("CI_ADMISSION_TEST_CRASH") == "1" {
+		os.Exit(86)
 	}
-	s, e := openSharedWork(p, "fixture", "audit")
-	if e != nil {
-		t.Fatal(e)
+	if accepted != limit {
+		t.Fatalf("accepted %d, want %d", accepted, limit)
 	}
-	defer s.Close()
-	all, e := s.leases()
-	if e != nil || len(all) != 3 {
-		t.Fatalf("leases %v %v", all, e)
+}
+func TestIndependentAdmissionAcrossProcesses(t *testing.T) {
+	p := t.TempDir()
+	init, err := openSharedWork(p, "fixture", "bootstrap")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Crashed/restarted owners retain their slots; only the owning deployment can
-	// release one, then another pool can use it without an event from its own job.
-	for n, l := range all {
-		owner, e := openSharedWork(p, "fixture", l.Owner)
+	init.Close()
+	var wg sync.WaitGroup
+	for i, limit := range []int{1, 3} {
+		wg.Add(1)
+		go func(i, limit int) {
+			defer wg.Done()
+			c := exec.Command(os.Args[0], "-test.run=^TestAdmissionProcess$")
+			c.Env = append(os.Environ(), "CI_ADMISSION_TEST_ROOT="+p, fmt.Sprintf("CI_ADMISSION_TEST_OWNER=pool-%d", i), fmt.Sprintf("CI_ADMISSION_TEST_LIMIT=%d", limit))
+			if out, e := c.CombinedOutput(); e != nil {
+				t.Errorf("child: %v %s", e, out)
+			}
+		}(i, limit)
+	}
+	wg.Wait()
+	for i, limit := range []int{1, 3} {
+		s, e := openSharedWork(p, "fixture", fmt.Sprintf("pool-%d", i), limit)
 		if e != nil {
 			t.Fatal(e)
 		}
-		if e = s.release(n); e == nil {
-			t.Fatal("foreign release permitted")
+		all, e := s.owned()
+		if e != nil || len(all) != limit {
+			t.Fatalf("restart lost records: %v %v", all, e)
 		}
-		if e = owner.release(n); e != nil {
-			t.Fatal(e)
+		if e = s.reserve("ci-job-ffffffff-001", false); !errors.Is(e, errCapacity) {
+			t.Fatal("restart admitted excess", e)
 		}
-		owner.Close()
-		break
-	}
-	if e = s.reserve("ci-job-ffffffff-000", false); e != nil {
-		t.Fatal(e)
-	}
-	if e = s.reserve("ci-job-ffffffff-001", false); !errors.Is(e, errCapacity) {
-		t.Fatal(e)
+		for n := range all {
+			if e = s.release(n); e != nil {
+				t.Fatal(e)
+			}
+			break
+		}
+		if e = s.reserve("ci-job-ffffffff-002", false); e != nil {
+			t.Fatal("freed local slot unavailable", e)
+		}
+		s.Close()
 	}
 }
 func TestSharedWorkIsolationAndRestart(t *testing.T) {
@@ -145,33 +150,35 @@ func TestSharedWorkIsolationAndRestart(t *testing.T) {
 	}
 }
 
-func TestGlobalCapacityReschedulesWithoutBlockingEvents(t *testing.T) {
+func TestOtherPoolCannotConsumeCapacity(t *testing.T) {
 	p := t.TempDir()
-	a, e := openSharedWork(p, "fixture", "pool-a")
+	a, e := openSharedWork(p, "fixture", "pool-a", 1)
 	if e != nil {
 		t.Fatal(e)
 	}
 	defer a.Close()
-	b, e := openSharedWork(p, "fixture", "pool-b")
+	b, e := openSharedWork(p, "fixture", "pool-b", 3)
 	if e != nil {
 		t.Fatal(e)
 	}
 	defer b.Close()
+	if e = a.reserve("ci-job-00000000-000", false); e != nil {
+		t.Fatal(e)
+	}
+	// Even unreadable/corrupt records in a stopped foreign pool do not affect b.
+	if e = os.WriteFile(filepath.Join(p, "pool-leases", "pool-a", "ci-job-00000000-000"), []byte("broken"), 0600); e != nil {
+		t.Fatal(e)
+	}
 	for i := 0; i < 3; i++ {
-		if e := a.reserve(fmt.Sprintf("ci-job-%08x-000", i), false); e != nil {
+		if e = b.reserve(fmt.Sprintf("ci-job-%08x-001", i), false); e != nil {
 			t.Fatal(e)
 		}
 	}
-	f := &fleet{work: b, changes: make(chan struct{}, 1), demandSource: func(context.Context) (int, error) { return 1, nil }}
-	if e := f.reconcileCurrent(context.Background()); e != nil {
-		t.Fatal("full global budget must not block listener completion", e)
+	f := &fleet{maxJobs: 3, work: b, changes: make(chan struct{}, 1), demandSource: func(context.Context) (int, error) { return 1, nil }}
+	if e = f.reconcileCurrent(context.Background()); e != nil {
+		t.Fatal(e)
 	}
 	if len(f.snapshot()) != 0 {
-		t.Fatal("capacity rejection created phantom job")
-	}
-	select {
-	case <-f.changes:
-	default:
-		t.Fatal("waiting pool won't retry after another pool releases")
+		t.Fatal("created phantom job")
 	}
 }

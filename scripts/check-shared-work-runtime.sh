@@ -18,7 +18,7 @@ cleanup() {
 trap cleanup EXIT
 docker volume create "$fixture" >/dev/null
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$test_dir/check"
-docker run --rm --name "$fixture" --network none --read-only --user 0 \
+docker run --rm --name "$fixture" --label com.docker.compose.project=ci-validation --label com.docker.compose.service=pool-fixture --network none --read-only --user 0 \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --security-opt no-new-privileges --memory 256m --memory-swap 256m --cpus 1 \
   --mount "type=volume,src=$fixture,dst=/work" \

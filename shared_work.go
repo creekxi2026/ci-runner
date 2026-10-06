@@ -1,7 +1,7 @@
 package main
 
-// One disk volume is shared by controllers, never by job roots. An OS advisory
-// lock serializes durable leases across controller processes (not just fleets).
+// One disk volume is shared by controllers, never by job roots.
+// Each pool has an exclusive owner and independent durable admission records.
 import (
 	"encoding/json"
 	"errors"
@@ -14,9 +14,9 @@ import (
 )
 
 const sharedWorkSchema = "shared-disk-v2"
-const globalJobLimit = 3
+const defaultPoolJobLimit = 3
 
-var errCapacity = errors.New("global job capacity full")
+var errCapacity = errors.New("pool job capacity full")
 
 type workLease struct {
 	Owner   string
@@ -28,9 +28,11 @@ type sharedWork struct {
 	lock, ownerLock *os.File
 	mu              sync.Mutex
 	volume, owner   string
+	limit           int
+	leaseDir        string
 }
 
-func openSharedWork(path, volume, owner string) (*sharedWork, error) {
+func openSharedWork(path, volume, owner string, limits ...int) (*sharedWork, error) {
 	if path == "" || volume == "" || owner == "" || filepath.Base(owner) != owner || owner == "." || owner == ".." {
 		return nil, fmt.Errorf("shared work path, volume and safe deployment owner required")
 	}
@@ -38,10 +40,18 @@ func openSharedWork(path, volume, owner string) (*sharedWork, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &sharedWork{root: root, volume: volume, owner: owner}
+	limit := defaultPoolJobLimit
+	if len(limits) > 0 {
+		limit = limits[0]
+	}
+	if limit < 1 || limit > 3 {
+		root.Close()
+		return nil, fmt.Errorf("pool job limit must be 1..3")
+	}
+	s := &sharedWork{root: root, volume: volume, owner: owner, limit: limit, leaseDir: "pool-leases/" + owner}
 	fail := func(e error) (*sharedWork, error) { s.Close(); return nil, e }
 	// Controllers run as root. Jobs cannot see these root-owned directories.
-	for _, p := range []string{"leases", "owners", "jobs", "templates"} {
+	for _, p := range []string{"leases", "pool-leases", "owners", "jobs", "templates"} {
 		if err = root.Mkdir(p, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 			return fail(err)
 		}
@@ -57,20 +67,14 @@ func openSharedWork(path, volume, owner string) (*sharedWork, error) {
 	if err = syscall.Flock(int(s.ownerLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fail(fmt.Errorf("controller owner already active: %w", err))
 	}
-	err = s.locked(func() error {
-		want := sharedWorkSchema + "\n" + volume + "\nlimit=3\n"
-		got, e := root.ReadFile("schema")
-		if errors.Is(e, os.ErrNotExist) {
-			return s.writeAtomic("schema", []byte(want))
+	err = s.initializeLayout()
+	if err == nil {
+		err = root.Mkdir(s.leaseDir, 0700)
+		if errors.Is(err, os.ErrExist) {
+			err = nil
 		}
-		if e != nil {
-			return e
-		}
-		if string(got) != want {
-			return fmt.Errorf("shared work schema/volume/budget mismatch")
-		}
-		return nil
-	})
+	}
+
 	if err != nil {
 		return fail(err)
 	}
@@ -90,10 +94,6 @@ func (s *sharedWork) Close() {
 func (s *sharedWork) locked(fn func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := syscall.Flock(int(s.lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN)
 	return fn()
 }
 func (s *sharedWork) writeAtomic(p string, b []byte) error {
@@ -123,7 +123,7 @@ func (s *sharedWork) writeAtomic(p string, b []byte) error {
 	return d.Sync()
 }
 func (s *sharedWork) leases() (map[string]workLease, error) {
-	d, e := s.root.Open("leases")
+	d, e := s.root.Open(s.leaseDir)
 	if e != nil {
 		return nil, e
 	}
@@ -141,12 +141,12 @@ func (s *sharedWork) leases() (map[string]workLease, error) {
 		if !validJobName.MatchString(n) || !entry.Type().IsRegular() {
 			return nil, fmt.Errorf("invalid admission record")
 		}
-		b, e := s.root.ReadFile("leases/" + n)
+		b, e := s.root.ReadFile(s.leaseDir + "/" + n)
 		if e != nil {
 			return nil, e
 		}
 		var l workLease
-		if e = json.Unmarshal(b, &l); e != nil || l.Owner == "" || l.Created.IsZero() {
+		if e = json.Unmarshal(b, &l); e != nil || l.Owner != s.owner || l.Created.IsZero() {
 			return nil, fmt.Errorf("invalid admission lease")
 		}
 		result[n] = l
@@ -171,11 +171,11 @@ func (s *sharedWork) reserve(n string, adopt bool) error {
 			}
 			return fmt.Errorf("job lease already exists")
 		}
-		if !adopt && len(all) >= globalJobLimit {
+		if !adopt && len(all) >= s.limit {
 			return errCapacity
 		}
 		b, _ := json.Marshal(workLease{s.owner, time.Now().UTC(), !adopt})
-		return s.writeAtomic("leases/"+n, b)
+		return s.writeAtomic(s.leaseDir+"/"+n, b)
 	})
 }
 func (s *sharedWork) owned() (map[string]workLease, error) {
@@ -195,7 +195,7 @@ func (s *sharedWork) owned() (map[string]workLease, error) {
 	return result, e
 }
 func (s *sharedWork) checkOwner(n string) error {
-	b, e := s.root.ReadFile("leases/" + n)
+	b, e := s.root.ReadFile(s.leaseDir + "/" + n)
 	if e != nil {
 		return e
 	}
@@ -264,10 +264,10 @@ func (s *sharedWork) release(n string) error {
 		if _, e := s.root.Lstat("jobs/" + n); !errors.Is(e, os.ErrNotExist) {
 			return fmt.Errorf("job data must be removed before release")
 		}
-		if e := s.root.Remove("leases/" + n); e != nil {
+		if e := s.root.Remove(s.leaseDir + "/" + n); e != nil {
 			return e
 		}
-		d, e := s.root.Open("leases")
+		d, e := s.root.Open(s.leaseDir)
 		if e != nil {
 			return e
 		}

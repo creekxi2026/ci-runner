@@ -18,6 +18,7 @@ services:
       RUNNER_IMAGE: ${RUNNER_IMAGE:?Set digest-pinned RUNNER_IMAGE from the same deployment artifact}
       IMAGE_REVISION: ${IMAGE_REVISION:?Set source revision from the deployment artifact}
       POSTGRES_IMAGE: ${POSTGRES_IMAGE:?Set a digest-pinned PostgreSQL image}
+      RUNNER_MAX_JOBS: ${RUNNER_MAX_JOBS:-3}
       RUNNER_IDLE_TIMEOUT_SECONDS: ${RUNNER_IDLE_TIMEOUT_SECONDS:-300}
       RUNNER_MAX_LIFETIME_SECONDS: ${RUNNER_MAX_LIFETIME_SECONDS:-3600}
       RUNNER_ALLOWED_EVENTS: ${RUNNER_ALLOWED_EVENTS:-workflow_dispatch}

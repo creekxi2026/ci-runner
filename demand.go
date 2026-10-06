@@ -10,7 +10,7 @@ import (
 // Source statistics come from the authenticated scale-set API, not a frozen
 // queue message. A nil source exists only for isolated message-handler tests.
 func (f *fleet) reconcileCurrent(ctx context.Context) error {
-	for range 3 {
+	for range f.jobLimit() {
 		f.mu.Lock()
 		stopped := f.stopping
 		f.mu.Unlock()
@@ -24,7 +24,7 @@ func (f *fleet) reconcileCurrent(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if additions(want, len(f.snapshot())) == 0 {
+		if additions(want, len(f.snapshot()), f.jobLimit()) == 0 {
 			return nil
 		}
 		if err = f.start(ctx); err != nil {

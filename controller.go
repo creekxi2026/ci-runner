@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-func additions(want, current int) int { return max(0, min(3, want)-current) }
+func additions(want, current, limit int) int { return max(0, min(limit, want)-current) }
 
 var errMissing = errors.New("docker resource missing")
 
@@ -78,6 +78,7 @@ type fleet struct {
 	work                          *sharedWork
 	jobs                          map[string]string
 	scaleMu                       sync.Mutex
+	maxJobs                       int
 	states                        map[string]*jobState
 	messages                      map[int]*messageProgress
 	idle, lifetime                time.Duration
@@ -136,12 +137,12 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	}
 	network := name + "-net"
 	f.mu.Lock()
-	if f.stopping || len(f.jobs) >= 3 {
+	if f.stopping || len(f.jobs) >= f.jobLimit() {
 		f.mu.Unlock()
 		if f.work != nil {
 			_ = f.work.release(name)
 		}
-		return fmt.Errorf("scheduling stopped or capacity full")
+		return errCapacity
 	}
 	if f.jobs == nil {
 		f.jobs = map[string]string{}
@@ -298,7 +299,7 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	} else if msg.Statistics != nil {
 		// Isolated handlers can use the supplied snapshot; run() always installs
 		// the live scale-set demand source for recovery and retry reconciliation.
-		for range additions(msg.Statistics.TotalAssignedJobs, len(f.snapshot())) {
+		for range additions(msg.Statistics.TotalAssignedJobs, len(f.snapshot()), f.jobLimit()) {
 			if err := f.start(ctx); err != nil {
 				return err
 			}
@@ -336,6 +337,10 @@ func ensureScaleSet(ctx context.Context, c scaleSets, name string) (*scaleset.Ru
 }
 
 func run() error {
+	maxJobs, err := poolJobLimit(os.Getenv("RUNNER_MAX_JOBS"))
+	if err != nil {
+		return err
+	}
 	events, err := allowedEvents(os.Getenv("RUNNER_ALLOWED_EVENTS"))
 	if err != nil {
 		return err
@@ -379,7 +384,7 @@ func run() error {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, databasePrefix: prefix, proxyEnv: proxyEnv, image: runnerImage, pgImage: postgresImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}
@@ -387,7 +392,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	f.work, err = openSharedWork(os.Getenv("JOB_WORK_ROOT"), os.Getenv("JOB_WORK_VOLUME"), f.owner)
+	f.work, err = openSharedWork(os.Getenv("JOB_WORK_ROOT"), os.Getenv("JOB_WORK_VOLUME"), f.owner, maxJobs)
 	if err != nil {
 		return err
 	}

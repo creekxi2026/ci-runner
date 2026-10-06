@@ -26,12 +26,13 @@ func TestSharedWorkRuntime(t *testing.T) {
 	}
 	owners := []string{prefix + "-a", prefix + "-b"}
 	fleets := []*fleet{}
-	for _, owner := range owners {
-		s, e := openSharedWork(root, volume, owner)
+	for i, owner := range owners {
+		limit := []int{3, 1}[i]
+		s, e := openSharedWork(root, volume, owner, limit)
 		if e != nil {
 			t.Fatal(e)
 		}
-		f := &fleet{owner: owner, image: image, work: s, jobs: map[string]string{}}
+		f := &fleet{maxJobs: limit, owner: owner, image: image, work: s, jobs: map[string]string{}}
 		fleets = append(fleets, f)
 		t.Cleanup(func() {
 			for n, net := range f.snapshot() {
@@ -41,8 +42,12 @@ func TestSharedWorkRuntime(t *testing.T) {
 		})
 	}
 	names := []string{}
-	for i := 0; i < 3; i++ {
-		f := fleets[i%2]
+	for i := 0; i < 4; i++ {
+		pool := 0
+		if i == 1 {
+			pool = 1
+		}
+		f := fleets[pool]
 		n := fmt.Sprintf("ci-job-%08x-%03x", uint32(time.Now().UnixNano()), i)
 		names = append(names, n)
 		if e := f.work.reserve(n, false); e != nil {
@@ -102,9 +107,9 @@ func TestSharedWorkRuntime(t *testing.T) {
 			}
 		}
 	}
-	// Both pools are full together. A fourth start must fail before Docker/JIT.
+	// The one-job pool is full; the other pool still has independent capacity.
 	if e := fleets[1].start(ctx); !errors.Is(e, errCapacity) {
-		t.Fatalf("fourth start: %v", e)
+		t.Fatalf("self-test pool exceeded one: %v", e)
 	}
 	if pg := os.Getenv("CI_DISK_INTEGRATION_POSTGRES"); pg != "" {
 		f := fleets[0]
@@ -131,10 +136,11 @@ func TestSharedWorkRuntime(t *testing.T) {
 		t.Fatal(e)
 	}
 	recovered.reap()
-	if len(recovered.snapshot()) != 2 {
+	if len(recovered.snapshot()) != 3 {
 		t.Fatal("live jobs lost on restart")
 	}
 	recovered.cleanup(names[0], "")
+	fleets[1].cleanup(names[1], "")
 	if _, ok := recovered.snapshot()[names[0]]; ok {
 		t.Fatal("job cleanup retained")
 	}
@@ -159,7 +165,7 @@ func TestSharedWorkRuntime(t *testing.T) {
 	if _, e := f.work.root.Stat("jobs/" + n); !errors.Is(e, os.ErrNotExist) {
 		t.Fatal("directory-only orphan leaked")
 	}
-	if len(restarted.snapshot()) != 1 {
+	if len(restarted.snapshot()) != 0 {
 		t.Fatal("foreign/live task removed")
 	}
 	for _, fl := range fleets {
@@ -174,5 +180,5 @@ func TestSharedWorkRuntime(t *testing.T) {
 	if _, e := f.work.root.Stat("schema"); e != nil {
 		t.Fatal("shared volume removed")
 	}
-	t.Log("two pools: global three, shared disk subpaths, worker/PG isolation, grouping, live restart, orphan cleanup, reusable slots passed")
+	t.Log("two pools: independent three and one, shared disk subpaths, worker/PG isolation, grouping, live restart, orphan cleanup, reusable slots passed")
 }
