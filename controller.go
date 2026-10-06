@@ -193,7 +193,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 		return err
 	}
 	proxyURL := "http://" + proxy + ":3128"
-	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1"}
+	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1", "CI_RUNNER_IMAGE=" + f.image, "CI_TOOLS_SEED=" + f.toolsSeed, "CI_POSTGRES_IMAGE=" + f.postgresImage()}
 	h := secure()
 	h["Memory"] = 4 * 1024 * 1024 * 1024
 	h["MemorySwap"] = h["Memory"]
