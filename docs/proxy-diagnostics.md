@@ -6,6 +6,23 @@ helper container's existing job/container labels to associate its Docker logs
 with a checkout; no job environment or credentials are read by the logger.
 An active tunnel's close record is available only when that tunnel ends.
 
+Before deleting a finished job's proxy, the controller copies up to the last
+200 close records into its own Docker logs as `retained_egress_close`, with the
+controller-owned `job` name and Docker's original UTC timestamp as `closed_at`.
+This survives deletion of the job containers and
+workspace. Retrieve it with `docker logs <controller>` filtered by that job.
+It is bounded operational retention, subject to the controller's Docker log
+rotation/deletion, not a permanent archive. Still-active tunnels may have no
+close record when cleanup begins.
+
+The read has a five-second deadline and a 512 KiB stream limit. Docker framing
+and JSON are validated; only typed, allowlisted diagnostic fields are emitted.
+Unknown fields, arbitrary log lines, exception text, URLs and headers are
+discarded. Collection failure is summarized without raw errors and does not
+block resource cleanup. Retried cleanup does not re-emit the same snapshot;
+after a controller restart a duplicate snapshot is possible and keeps the same
+job identity.
+
 Fields:
 
 - `hostname`: ASCII DNS-label syntax, labels at most 63 characters and total at

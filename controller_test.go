@@ -76,7 +76,7 @@ func TestCleanupSuccessRemovesState(t *testing.T) {
 	withEngine(t, func(w http.ResponseWriter, r *http.Request) { paths = append(paths, r.URL.Path); w.WriteHeader(204) })
 	f := &fleet{jobs: map[string]string{"owned-job": "owned-net"}}
 	f.cleanup("owned-job", "owned-net")
-	if len(f.jobs) != 0 || len(paths) != 5 {
+	if len(f.jobs) != 0 || len(paths) != 6 {
 		t.Fatal("cleanup omitted job companions")
 	}
 }

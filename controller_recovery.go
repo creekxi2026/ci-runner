@@ -30,6 +30,7 @@ type jobState struct {
 	gate                         bool
 	disk                         bool
 	shared                       bool
+	diagnosticsCaptured          bool
 	idleExec                     string // retained across ambiguous start/inspect responses
 }
 type messageProgress struct {
@@ -85,6 +86,12 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 		resources = j.resources
 	}
 	for _, r := range resources {
+		if r == n+"-proxy" && !j.diagnosticsCaptured {
+			// The runner is already stopped. Preserve only bounded, allowlisted
+			// close records in controller logs before Docker deletes proxy logs.
+			captureProxyDiagnostics(n)
+			j.diagnosticsCaptured = true
+		}
 		if err := docker("DELETE", "/containers/"+r+"?force=true&v=true", nil, nil); err != nil {
 			return
 		}

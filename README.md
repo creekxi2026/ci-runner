@@ -50,6 +50,8 @@ Registry multi-tag publication is **not atomic**: a failed promotion can leave a
 - The pinned Go 1.26.6 and Node 24.14.0 toolchains are image-managed. Each job seeds private toolcache links to read-only image binaries; setup-go/setup-node can reuse these versions without downloading them. Other requested versions still require public network access.
 - Runner images default to `GOPROXY=https://goproxy.cn` with `GOSUMDB=sum.golang.org`; checksum verification remains enabled. Workflows can override these defaults. Set appropriate `GOPRIVATE`/`GONOPROXY`/`GONOSUMDB` before requesting private modules to avoid disclosing private module paths to public services. This setting affects Go modules only, not GitHub, Node or other traffic.
 - Immutable images remain in the Docker daemon until explicitly retired. Updates are cloud-built; no local build cache is needed. Review and remove exact unused CI image references when appropriate; there is no global pruning or cleanup of other deployments.
+- Jobs receive `CI_RUNNER_IMAGE` and `CI_POSTGRES_IMAGE` (the controller's validated immutable image references), plus `CI_TOOLS_SEED` (the optional immutable tool seed). Workflows can bind reusable verification evidence to this environment identity; these values grant no access to the controller or other jobs.
+- Finished-job proxy close diagnostics are copied, bounded and sanitized, to controller logs before proxy deletion. See [proxy diagnostics](docs/proxy-diagnostics.md) for fields, retrieval and retention limits.
 
 ## Optional dependency caches
 
