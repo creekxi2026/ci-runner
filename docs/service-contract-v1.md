@@ -1,10 +1,8 @@
 # Generic job services v1
 
-This is the runner-side confirmed implementation contract for RUIF-15 and its
-RUIF-13 consumer, incorporating the consumer's requested boundaries.
-The implementation on this draft branch is not yet deployed. The existing
-controller stays operational until both sides pass migration acceptance. The
-previous parameterized database API has been removed from the new core.
+This is the implemented runner-side service v1 contract. Consuming projects own
+their adapters and workflows; operators coordinate upgrades for each deployment.
+The previous parameterized database API has been removed from the core.
 The controller must not interpret database names,
 SQL, framework/tool names, or application environment variables.
 
@@ -222,10 +220,11 @@ changes fail closed. Existing separate runner/seed fields may remain for clarity
 
 ## Migration acceptance
 
-RUIF-13 owns the project adapter, service declaration, tool manifest, wrapper,
-strict database validator mapping and receipt version 2. RUIF-15 owns the generic
-catalog validator, CLI/files, adapter lifecycle, fingerprint and cleanup. Until
-both are ready, retain the currently deployed controller and project interface.
+The consuming project owns its adapter, service declaration, tool manifest,
+wrapper, service-specific validation and verification receipts. The runner owns
+the generic catalog validator, CLI/files, adapter lifecycle, fingerprint and
+cleanup. For deployments still using the former interface, retain the pinned
+controller and project interface until both sides pass migration acceptance.
 Do not deploy the intermediate suffix-parameter change as the final architecture.
 
 Validate two concurrent isolated jobs; non-admin consumer credentials; partial,
