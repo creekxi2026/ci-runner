@@ -5,6 +5,21 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class MigrationConfiguration(unittest.TestCase):
+    def test_removed_business_api_is_not_distributed_or_used_by_core(self):
+        # Known migration regressions only; semantic neutrality needs review.
+        files = [p for p in ROOT.glob('*.go') if not p.name.endswith('_test.go')]
+        files += list(ROOT.glob('*.py')) + list(ROOT.glob('*.sh'))
+        files += [ROOT / 'Dockerfile', ROOT / 'compose.yaml', ROOT / '.env.example']
+        files += list((ROOT / 'scripts').glob('*.py'))
+        files += list((ROOT / '.github/workflows').glob('*.yml'))
+        forbidden = re.compile(
+            r'ci-postgres|CI_POSTGRES_IMAGE|POSTGRES_IMAGE|'
+            r'CLOSET_PG_[A-Z_]+|CI_DATABASE_[A-Z_]+|closet_ai_test_')
+        for path in files:
+            with self.subTest(path=str(path.relative_to(ROOT))):
+                self.assertIsNone(forbidden.search(path.name))
+                self.assertIsNone(forbidden.search(path.read_text()))
+
     def test_runner_image_contains_generic_rsync_dependency(self):
         runner = (ROOT / 'Dockerfile').read_text().split(' AS runner', 1)[1]
         packages = re.search(r'apt-get install -y --no-install-recommends ([^&]+)', runner).group(1).split()

@@ -49,7 +49,7 @@ Registry multi-tag publication is **not atomic**: a failed promotion can leave a
 - The pinned Go 1.26.6 and Node 24.14.0 toolchains are image-managed. Each job seeds private toolcache links to read-only image binaries; setup-go/setup-node can reuse these versions without downloading them. Other requested versions still require public network access.
 - Runner images default to `GOPROXY=https://goproxy.cn` with `GOSUMDB=sum.golang.org`; checksum verification remains enabled. Workflows can override these defaults. Set appropriate `GOPRIVATE`/`GONOPROXY`/`GONOSUMDB` before requesting private modules to avoid disclosing private module paths to public services. This setting affects Go modules only, not GitHub, Node or other traffic.
 - Immutable images remain in the Docker daemon until explicitly retired. Updates are cloud-built; no local build cache is needed. Review and remove exact unused CI image references when appropriate; there is no global pruning or cleanup of other deployments.
-- Jobs receive `CI_RUNNER_IMAGE` and `CI_POSTGRES_IMAGE` (the controller's validated immutable image references), plus `CI_TOOLS_SEED` (the optional immutable tool seed). Workflows can bind reusable verification evidence to this environment identity; these values grant no access to the controller or other jobs.
+- Jobs receive `CI_RUNNER_IMAGE`, `CI_SERVICES_FILE` and `CI_SERVICES_FINGERPRINT`, plus `CI_TOOLS_SEED` and, when configured, `CI_DEPENDENCY_SEED`. Workflows bind reusable verification evidence to the runner image, service fingerprint and seeds. Service/adapter image references are in the read-only descriptor; the runner exports no database-specific image variable. These values grant no access to the controller or other jobs.
 - Finished-job proxy close diagnostics are copied, bounded and sanitized, to controller logs before proxy deletion. See [proxy diagnostics](docs/proxy-diagnostics.md) for fields, retrieval and retention limits.
 
 ## Optional dependency caches
@@ -227,8 +227,8 @@ credentials before exporting environment variables. The generic runner knows no
 application variable names, database layout, SQL or tool-directory conventions.
 
 The [service v1 contract](docs/service-contract-v1.md) specifies the exact schema,
-trust boundary, failure codes and fingerprint. New code implements this API;
-existing deployed images do not gain it until coordinated cutover. The entire
+trust boundary, failure codes and fingerprint. This is the current API;
+older pinned images require the coordinated migration below. The entire
 catalog contributes to `CI_SERVICES_FINGERPRINT` before any service is requested.
 Each service gets a separate internal network and guarded namespace. Both the
 worker and service firewall deny sibling/host/public connections; initializers
@@ -270,9 +270,24 @@ Project source and SQL are fixture inputs and are never added to this repository
 
 ## Updates and development
 
-Download a new successful deployment artifact. Update the existing `.env` **image digest pair, source revision and PostgreSQL digest**, preserving private settings and credentials. Pull all selected images before `docker compose up -d`; do not replace `.env` wholesale with a generic template. Runner automatic updates are enabled separately from image/toolchain publishing.
+Download a new successful deployment artifact. Update the existing `.env` **controller/runner image digest pair and source revision**, preserving private settings, seeds and credentials. Review any service/adapter digest changes in the project-owned catalog and operator policy separately; retain their read-only mount. Make every selected image available by its verified digest before a drained `docker compose up -d`; do not replace `.env` wholesale with a generic template. Runner automatic updates are enabled separately from image/toolchain publishing.
 
-Base images and PostgreSQL are digest pinned. The exact official PostgreSQL dependency is mirrored by the cloud build into GHCR, so the execution host does not need Docker Hub access. Apt uses fixed, signed repository snapshots; signature checks remain enabled (snapshot expiry checks are intentionally disabled). Refresh snapshots and dependencies through a reviewed image rebuild, not mutable installation during jobs.
+Base images are digest pinned. This repository publishes only controller and runner images. Consuming projects own service/adapter image publication and distribution; the generic release does not mirror database images. Apt uses fixed, signed repository snapshots; signature checks remain enabled (snapshot expiry checks are intentionally disabled). Refresh snapshots and dependencies through a reviewed image rebuild, not mutable installation during jobs.
+
+### Keeping the runner generic
+
+The maintenance rules in [AGENTS.md](AGENTS.md) apply to code and documentation:
+project database layout, SQL, application variables, SDK conventions and deployment
+decisions belong in project workflows/adapters. The controller validates the
+generic envelope, enforces isolation/budgets and owns cleanup; it does not interpret
+opaque project configuration or consumer output. Adding a new project must not
+require a project-specific branch in the runner core.
+
+`tests/test_migration_config.py` checks known removed API names and entrypoints in
+first-party runtime and distribution files; release tests also constrain published
+image roles. These run in the existing image and smoke workflows. They catch known
+regressions, not every possible future business coupling. Changes to the service
+boundary still require an independent review and relevant generic contract tests.
 
 ```sh
 go test -race ./...
