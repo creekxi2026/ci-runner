@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -13,13 +14,18 @@ import stat
 spec = importlib.util.spec_from_file_location('workspace', Path(__file__).with_name('workspace-init.py'))
 workspace = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workspace)
-DIRECTORIES = ('python', 'bin', 'wheels', 'wechat')
+def tool_directories(values):
+    if not values or len(values) != len(set(values)):
+        raise ValueError('select at least one unique tool directory')
+    if any(not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}', name) for name in values):
+        raise ValueError('tool directories must be simple relative names')
+    return tuple(sorted(values))
 
 
-def validate_source(source):
+def validate_source(source, directories):
     # Source must stay idle during publication. Check every selected entry;
     # never promote job-writable executables into a trusted tool snapshot.
-    for name in DIRECTORIES:
+    for name in tool_directories(directories):
         root = source / name
         if root.is_symlink() or not root.is_dir():
             raise ValueError('missing tool directory: ' + name)
@@ -34,14 +40,15 @@ def validate_source(source):
                 raise ValueError('tool source is writable or has unsupported entries')
 
 
-def publish_tools(source, root, provenance):
-    validate_source(source)
+def publish_tools(source, root, provenance, directories):
+    directories = tool_directories(directories)
+    validate_source(source, directories)
     stage = root / 'tools-import.staging'
     if stage.exists(): shutil.rmtree(stage)
     stage.mkdir(mode=0o700)
     counts = {'cloned_bytes': 0, 'copied_bytes': 0}
     try:
-        for name in DIRECTORIES:
+        for name in tool_directories(directories):
             workspace.clone_tree(source / name, stage / name, os.geteuid(), counts, link_root=source / name)
         content = {'schema': 1, 'files': workspace.manifest(stage, runner=True), 'provenance': provenance,
                    'platform': 'linux-arm64-ubuntu24.04',
@@ -71,13 +78,14 @@ def main():
     p.add_argument('--templates', default='/templates')
     p.add_argument('--source', default='/source/tools')
     p.add_argument('--provenance', required=True)
+    p.add_argument('--tool', action='append', required=True, help='Tool directory to include; repeat for each directory')
     args = p.parse_args()
     root = Path(args.templates)
     if os.getuid() != 0 or root.is_symlink() or root.stat().st_uid != 0 or root.stat().st_mode & 0o077:
         raise ValueError('administrator-owned 0700 templates root required')
     with (root / 'template.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        print(json.dumps(publish_tools(Path(args.source), root, args.provenance)), flush=True)
+        print(json.dumps(publish_tools(Path(args.source), root, args.provenance, args.tool)), flush=True)
 
 
 if __name__ == '__main__': main()

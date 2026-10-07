@@ -26,7 +26,7 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sourc
  'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261004T000000Z/ noble main universe' \
  'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261004T000000Z/ noble-updates main universe' \
  'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261004T000000Z/ noble-security main universe' > /etc/apt/sources.list \
- && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq python3 python3-venv python3-pip postgresql-client iptables libicu74 libssl3t64 libkrb5-3 zlib1g build-essential gh rsync && rm -rf /var/lib/apt/lists/* \
+ && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq python3 python3-venv python3-pip iptables libicu74 libssl3t64 libkrb5-3 zlib1g build-essential gh rsync && rm -rf /var/lib/apt/lists/* \
  && useradd -m -u 1001 -s /bin/bash runner
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
@@ -41,12 +41,10 @@ ENV GOPROXY=https://goproxy.cn GOSUMDB=sum.golang.org
 COPY egress.py firewall.sh runner.sh toolcache-init.sh cache-init.py job-disk-init.py /opt/ci/
 COPY cache-env.sh cache-toolcache-init.sh /opt/ci/
 COPY workspace-init.py tools-init.py cache-compatibility.json /opt/ci/
-COPY ci-postgres.sh /usr/local/bin/ci-postgres
+COPY ci-service.py /usr/local/bin/ci-service
+COPY service-firewall.sh /opt/ci/
 RUN chmod 755 /opt/ci/*.sh
-RUN chmod 755 /usr/local/bin/ci-postgres
+RUN chmod 755 /usr/local/bin/ci-service
 WORKDIR /home/runner
 USER runner
 CMD ["/opt/ci/runner.sh"]
-
-# Mirror the exact official PostgreSQL dependency so deployment only needs GHCR.
-FROM postgres:17-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652 AS postgres

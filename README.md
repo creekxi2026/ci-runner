@@ -10,14 +10,13 @@ Requirements: an ARM64 Linux Docker daemon (OrbStack on Apple Silicon), Compose,
 
 1. Download `compose.yaml` and `env.txt` from the deployment artifact of a **successful** `Cloud ARM64 images` workflow. Rename `env.txt` to `.env`. GitHub artifact downloads require a GitHub login.
 2. Set `GITHUB_CONFIG_URL` and a unique `SCALE_SET_NAME` in `.env`. Create `.secrets/github-token` with the authorized token; restrict it to mode `0600`. Never commit credentials or add them to runner environments.
-3. Pull all three digest-pinned images, then start the controller:
+3. Install the reviewed `services/catalog.json` and `services/policy.json` from the artifact (empty by default). Keep them root-owned and not group/world-writable; set `SERVICES_CONFIG_DIR` to this private directory. Pull the controller/runner pair plus any operator-selected service/adapter images, then start the controller:
 
 ```sh
 # Run in the private directory containing compose.yaml and .env.
 set -a; . ./.env; set +a
 docker compose pull
 docker pull "$RUNNER_IMAGE"
-docker pull "$POSTGRES_IMAGE"
 docker volume create ci-work-linux-arm64
 docker compose up -d
 ```
@@ -28,25 +27,25 @@ The [blank configuration template](.env.example) is also available for manual se
 
 ### Image publication and deployment snapshots
 
-The cloud workflow publishes three separate GHCR packages: `ghcr.io/<owner>/ci-runner-controller`, `ghcr.io/<owner>/ci-runner-runner`, and `ghcr.io/<owner>/ci-runner-postgres`. Each package has only the `latest` tag; no source-revision or build-ID tags are generated. The full source SHA remains in OCI labels and the deployment artifact.
+The cloud workflow publishes two GHCR packages: `ghcr.io/<owner>/ci-runner-controller` and `ghcr.io/<owner>/ci-runner-runner`. Each package has only the `latest` tag; no source-revision or build-ID tags are generated. The full source SHA remains in OCI labels and the deployment artifact.
 
-Publication runs are serialized without cancelling an in-progress run. ARM64 candidates are pushed by digest without tags. All three publication digests must validate before any `latest` promotion begins. Promotions preserve the single-manifest digest rather than creating a new index. Only after all promotions succeed does the workflow generate and upload the deployment artifact.
+Publication runs are serialized without cancelling an in-progress run. ARM64 candidates are pushed by digest without tags. Both publication digests must validate before any `latest` promotion begins. Promotions preserve the single-manifest digest rather than creating a new index. Only after all promotions succeed does the workflow generate and upload the deployment artifact.
 
-Registry multi-tag publication is **not atomic**: a failed promotion can leave a mixture of old and new `latest` tags. Failed candidate pushes do not change `latest`, and failed promotions do not produce a deployment artifact. The successful artifact—not the mutable tags—selects a coherent deployment. Its `env.txt` fixes all three role-package references as `ghcr.io/<owner>/ci-runner-<role>@sha256:...` for that deployment. Jobs never resolve `latest`; existing deployments keep their fixed snapshots until explicitly updated. Older untagged digests are not a guaranteed registry archive, so retain the selected images locally or in an approved archive if long-term rollback is required.
+Registry multi-tag publication is **not atomic**: a failed promotion can leave a mixture of old and new `latest` tags. Failed candidate pushes do not change `latest`, and failed promotions do not produce a deployment artifact. The successful artifact—not the mutable tags—selects a coherent deployment. Its `env.txt` fixes both role-package references as `ghcr.io/<owner>/ci-runner-<role>@sha256:...` for that deployment. Jobs never resolve `latest`; existing deployments keep their fixed snapshots until explicitly updated. Older untagged digests are not a guaranteed registry archive, so retain the selected images locally or in an approved archive if long-term rollback is required.
 
 ## Lifecycle and storage
 
-- Only the controller runs without demand. Each job receives a private runner, proxy and internal IPv4/IPv6 network. PostgreSQL is **opt-in per job**, not created by default. Dependency caches are **off by default**; opt-in persistent storage is described below.
+- Only the controller runs without demand. Each job receives a private runner, proxy and internal IPv4/IPv6 network. Project services are **opt-in per job**, selected from a trusted catalog; an empty catalog starts no services. Dependency caches are **off by default**; opt-in persistent storage is described below.
 - A failed new runner or transient GitHub polling/acknowledgement failure does not tear down other jobs. Startup adopts existing live jobs before acquiring a GitHub session. Cleanup and lifetime checks operate independently of GitHub polling.
 - Idle, unassigned runners expire after `RUNNER_IDLE_TIMEOUT_SECONDS` (default **300**). All runners have an absolute creation-based lifetime of `RUNNER_MAX_LIFETIME_SECONDS` (default **3600**); controller restart does not reset it. The job-start hook prevents idle reclamation racing assignment; its job-writable marker is not a security credential.
 - Graceful stop stops scheduling and drains work until it exits or reaches its lifetime. Compose allows up to the configured lifetime for this drain. A hard controller crash preserves live job containers. Actual removal can be delayed by Docker unavailability; labeled cleanup state is retained for recovery.
-- Runner root filesystems remain read-only. All controllers use one **disk-backed Docker local volume**, `ci-work-linux-arm64`. Each job gets private `jobs/<job>/home`, `tmp`, `postgres` and `postgres-run` subdirectories mounted with Docker volume subpaths. Workers never see the volume root, sibling jobs, admission metadata or PostgreSQL files. UID 1001 owns runner directories; UID 999 owns database directories. Source, `node_modules`, credentials and scratch remain private and disposable.
+- Runner root filesystems remain read-only. All controllers use one **disk-backed Docker local volume**, `ci-work-linux-arm64`. Each job gets private `jobs/<job>/home`, `tmp`, `service-private` and `service-public` subdirectories mounted with Docker volume subpaths. Workers never see the volume root, sibling jobs, admission metadata or service bootstrap files. UID 1001 owns runner directories; the controller owns service metadata. Service data lives in bounded private tmpfs mounts. Source, `node_modules`, credentials and scratch remain private and disposable.
 - Controllers mount the volume root at `/var/lib/ci-runner/work`. Each deployment uses an independent `RUNNER_MAX_JOBS` quota (1..3, default 3), protected by a process mutex and durable `pool-leases/<deployment>/` records. An exclusive deployment-owner lock prevents duplicate controllers for the same pool. Runtime admission does not take a cross-pool file lock or count foreign records. A full pool retains demand without blocking completion events. Set the application pool to 3 and the self-test pool to 1 for a four-job host ceiling; unused capacity is not borrowed.
 - Upgrade from the old global-three format requires **all controllers stopped and all jobs/legacy leases drained**. Startup refuses migration otherwise; a short file lock protects only layout initialization. Back up the private deployment configuration before cutover. Old images reject the new format: rollback requires a drained, explicit layout restoration, not just restarting an old image. Mount and schema validation still fail closed.
 - Cleanup removes job containers first, then only that job's directory; it releases the pool slot after cleanup and deregistration. Restart preserves live jobs and reclaims interrupted provisioning, including directory-only orphans. Legacy per-job disks are recovered and retired without deleting active work. The shared volume is external to Compose; it and the independent dependency cache survive job cleanup and deployment `compose down -v`. Removing job files releases filesystem space for reuse; it does not promise immediate shrinking of the host's OrbStack VM disk image.
 - A new workspace must have at least **5 GiB free**. This check is not a quota or reservation; concurrent writers can still fill the disk. Controllers need CHOWN/DAC_OVERRIDE/FOWNER for private UID directories and cleanup of restrictive job file modes; workers retain cap-drop ALL. No transient disk-initializer container is needed.
-- Runner memory stays **4 GiB**, with `MemorySwap` also 4 GiB (no extra swap). PostgreSQL is limited to **512 MiB**, proxy to **128 MiB**, controller to **256 MiB**. Four fully loaded database jobs plus two controllers can reach **19456 MiB** of memory ceilings before VM/daemon overhead: independent 3+1 quotas are deliberate oversubscription, not a guarantee that all limits fit in an 8 GiB VM. Limits are not preallocated memory. Logs rotate at 2 × 5 MiB per container.
-- Dynamic runner/proxy/database/helper containers appear under the separate `ci-jobs` Compose project, with per-job service and role labels. These labels organize the UI; the controller owns lifecycle. Do not use `compose down` on that group. Deployment Compose projects remain separate, so `up --remove-orphans` on a deployment cannot select active jobs.
+- Runner memory stays **4 GiB**, with `MemorySwap` also 4 GiB (no extra swap). Proxy memory is **128 MiB**, controller **256 MiB**. Each service has operator-bounded memory/CPU/PID/data/startup limits; service, adapter, namespace and firewall shares cannot exceed that configured service budget. Pool limits are ceilings, not reservations, and must fit the host's capacity. Service/adapter logs are disabled to keep bootstrap/consumer credentials out of logs; runner/proxy logs rotate at 2 × 5 MiB.
+- Dynamic runner/proxy/service/helper containers appear under the separate `ci-jobs` Compose project, with per-job service and role labels. These labels organize the UI; the controller owns lifecycle. Do not use `compose down` on that group. Deployment Compose projects remain separate, so `up --remove-orphans` on a deployment cannot select active jobs.
 - The pinned Go 1.26.6 and Node 24.14.0 toolchains are image-managed. Each job seeds private toolcache links to read-only image binaries; setup-go/setup-node can reuse these versions without downloading them. Other requested versions still require public network access.
 - Runner images default to `GOPROXY=https://goproxy.cn` with `GOSUMDB=sum.golang.org`; checksum verification remains enabled. Workflows can override these defaults. Set appropriate `GOPRIVATE`/`GONOPROXY`/`GONOSUMDB` before requesting private modules to avoid disclosing private module paths to public services. This setting affects Go modules only, not GitHub, Node or other traffic.
 - Immutable images remain in the Docker daemon until explicitly retired. Updates are cloud-built; no local build cache is needed. Review and remove exact unused CI image references when appropriate; there is no global pruning or cleanup of other deployments.
@@ -137,7 +136,7 @@ Deployment, exact repository and trust lane remain in strict `ci-runner.cache-*`
 labels under the `v2-linux-arm64-trusted-manual` schema. They are not discarded
 when the name loses its hash. Reusing a name with foreign labels fails closed;
 choose a separate explicit name for a different deployment/trust scope. No volume
-is created or mounted when caching is off, and job cleanup never deletes a volume.
+is created or mounted when caching is off, and job cleanup never deletes that dependency volume.
 
 Controller jobs and `profiles/cache/compose.yaml` use the **same** initializer,
 `data` layout, `cache-env.sh`, and immutable optional tool mount. The standalone
@@ -211,49 +210,63 @@ No additional source trust is inferred or invented by the controller.
 
 Set `PUBLIC_EGRESS_DOH_URL=https://dns.alidns.com/resolve` in the deployment `.env` to use a trusted HTTPS JSON DNS resolver inside the per-job public gateway. This does not modify Mac/OrbStack/system DNS or give the workload direct DNS access. TLS verification stays enabled; all returned IPv4/IPv6 addresses must still be public, and failed HTTPS DNS does not fall back to synthetic system answers. This resolver handles workload destinations, not the controller's own GitHub API DNS. Leave it empty to retain ordinary DNS.
 
-Job INPUT/OUTPUT are deny-by-default. Outbound traffic is limited to the job's HTTP/CONNECT proxy (public TCP/80 and TCP/443 only) and its PostgreSQL TCP/5432. The proxy checks every DNS answer, rejects nonpublic addresses, and dials a verified numeric address without resolving again. SSH, UDP and arbitrary external database access are unavailable.
+Job INPUT/OUTPUT are deny-by-default. Outbound traffic is limited to the job's HTTP/CONNECT proxy (public TCP/80 and TCP/443 only) and the declared TCP ports of its acquired private services. The proxy checks every DNS answer, rejects nonpublic addresses, and dials a verified numeric address without resolving again. SSH, UDP and arbitrary external database access are unavailable.
 
 A trusted deployment may set `PUBLIC_EGRESS_UPSTREAM_PROXY` to an existing credential-free HTTP proxy (for example, `http://host.docker.internal:7897` on a Mac with that proxy). Only the per-job gateway receives this setting. DNS validation still happens first and the upstream CONNECT target is the verified numeric IP, never the job-supplied hostname. Direct egress remains the default; this does not change host or OrbStack network settings.
 
 A short-lived NET_ADMIN helper installs namespace firewall rules and is removed before registration. Jobs have all capabilities dropped, no sudo, no host mounts, no Docker socket and no controller administration token. Docker service/container Actions are not supported. The controller itself has Docker-root-equivalent authority; do not expose its socket or run untrusted controller source. Containers share the VM kernel; this is not a separate VM boundary against kernel exploits.
 
-## Optional PostgreSQL
+## Optional project services
 
-Run `ci-postgres` only in jobs that need a disposable database. In GitHub Actions it appends connection settings to `$GITHUB_ENV` for **subsequent steps**. For the current step use `ci-postgres <command> ...`, for example `ci-postgres psql -v ON_ERROR_STOP=1 -c 'SELECT 1'`. It emits only Actions `::add-mask::` commands for `PGPASSWORD` and the complete `DATABASE_URL` before opening `$GITHUB_ENV`, with percent/CR/LF workflow-command escaping. Outside Actions (no `$GITHUB_ENV`) it stays silent. Mask registration is not permission to print or upload connection files, and cannot redact secrets already logged before registration; avoid shell tracing and credential diagnostics. It does not require `eval`.
+`ci-service acquire <service-id> [--timeout 45]` requests a service selected from
+the controller's reviewed catalog and returns its read-only ready descriptor.
+`ready` only waits for an existing request; `exec <id> -- <command>` acquires then
+runs locally as the worker, exporting `CI_SERVICE_FILE`. Credentials stay in a
+private output file. Project wrappers validate their own schema and mask any
+credentials before exporting environment variables. The generic runner knows no
+application variable names, database layout, SQL or tool-directory conventions.
 
-The fixed per-job request creates at most one bounded PostgreSQL companion with a generated password; repeated requests reuse it. The controller waits for readiness outside the janitor, adds only this database's TCP/5432 namespace allowance, and publishes configuration atomically. It never accepts arbitrary images, Docker commands or another job's database through the request. Without a request there is no database container, database environment or TCP/5432 allowance. Cleanup includes requested databases. A controller restart conservatively preserves ambiguous job claims until the original hard lifetime.
+The [service v1 contract](docs/service-contract-v1.md) specifies the exact schema,
+trust boundary, failure codes and fingerprint. New code implements this API;
+existing deployed images do not gain it until coordinated cutover. The entire
+catalog contributes to `CI_SERVICES_FINGERPRINT` before any service is requested.
+Each service gets a separate internal network and guarded namespace. Both the
+worker and service firewall deny sibling/host/public connections; initializers
+and checks can only reach their own service. Initialization/check containers are
+pinned, run without a Docker socket, and share the persisted startup deadline.
+Cancellation interrupts provisioning before removing owned containers/networks.
+A stopped data service is never restarted with an empty tmpfs under an old lease.
 
-`POSTGRES_DATABASE_PREFIX` defaults to empty, preserving the generic `ci` database
-and bootstrap-role behavior. A non-empty operator prefix enables a trusted
-controller-provisioned **pair**: `<prefix><24 lowercase hex>` and that primary name
-plus `_staging`, both owned by the same non-admin login role (`NOSUPERUSER`,
-`NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`, no role memberships).
-Prefixes must start with a lowercase letter, contain only lowercase letters,
-digits or underscores, end in underscore and be at most 31 bytes, keeping both
-database identifiers within PostgreSQL's 63-byte limit. A private application
-fleet may configure `closet_ai_test_`; no application scripts are baked into images.
+Start from the empty catalog/policy in `examples/services`. The project provides
+its declaration, immutable image references and adapter. The operator separately
+allows storage targets and resource ceilings in `policy.json`; a candidate PR
+can request an existing ID but cannot modify those files. Mount the directory
+read-only into the controller and make both files root-owned (mode 0444).
 
-Names derive from the deployment/job identity; the login password derives with
-HMAC from bootstrap state preserved privately in the owned disposable cluster.
-Retries and controller recovery reuse the same pair/password. Changed prefixes,
-foreign container ownership, partial pairs, inconsistent ownership or elevated
-role privileges fail closed without publishing worker configuration or silently
-repairing state. Failed partial creation requires disposal of the job/cluster,
-not manual repair inside a running job. Do not change lease mode/prefix while jobs
-are active. Cluster data is disposable, not a persistent recovery database.
+Resource limits describe the aggregate service budget: 12/16 for the server,
+2/16 for one adapter, 1/16 for the namespace holder and 1/16 for a firewall helper.
+Data capacity is divided among declared tmpfs targets; `/tmp` and `/run` have
+16 MiB caps and are also charged to each container's memory budget. Service
+images with undeclared Docker VOLUMEs are rejected. Adapter output publication
+is limited to one regular JSON file of at most 64 KiB. Adapter private output
+scratch is controller-owned job storage, visible only to that trusted adapter.
 
-With a configured prefix workers receive **only the non-admin** credentials:
-`CI_DATABASE_NAME`, `CI_DATABASE_COMPANION_NAME`, `DATABASE_URL`,
-`CI_DATABASE_HOST`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`.
-Both databases are verified using that login before publishing the mode-0600
-environment file atomically. Secrets use scoped Docker exec environment and SQL
-stdin, never process argv or stdout/logs. The privileged provisioning session
-also disables PostgreSQL statement/error/duration logging so rejected ownership
-or privilege checks cannot leak password-bearing SQL into server logs.
-`$GITHUB_ENV` exports are whitelisted;
-connection settings are secret-bearing files and must not be printed/uploaded.
-All provisioning/verification/publication shares the existing 45-second readiness
-budget and immutable job lifetime; the janitor never waits on SQL readiness.
+Run `bash scripts/check-service-runtime.sh <local-runner-digest>` for isolated
+Docker acceptance with a dummy TCP service; it creates and removes only fixture
+resources. Project database semantics are tested in the consuming repository.
+
+For a real project consumer, run
+`bash scripts/check-service-consumer-runtime.sh <local-base-digest> <fixture-dir>`.
+The external fixture contains `catalog.json`, `policy.json`, and `probe.py` plus
+its project validation dependencies. The base image must already contain the
+required interpreter/libraries; no package installation or download runs in the
+test. The probe accepts `route`, `acquire`, `isolation <other-service-IP>` and
+`recover` modes, returning nonzero on any invalid state and never printing secrets.
+The harness exercises real image/catalog admission, computes the fingerprint,
+starts two private jobs, serves their CLI requests through the normal maintenance
+loop, and checks recovery/cancellation/cleanup. Docker-generated local manifest
+references are required; these are local test artifacts, not registry releases.
+Project source and SQL are fixture inputs and are never added to this repository.
 
 ## Updates and development
 
@@ -278,10 +291,31 @@ pool cache or access to the templates parent. Python is registered in each
 job's private Actions tool cache; the binaries and wheels stay read-only.
 
 Publish from an idle, explicitly reviewed CI cache with
-`profiles/cache/publish-seed.py --tools --source-volume ci-deps-linux-arm64-cache --image <verified-runner-digest> --provenance <review-reference>`.
-The publisher selects `tools/{python,bin,wheels,wechat}`, checks ownership and
-contained relative links, uses FICLONE where supported, hashes all files and
+`profiles/cache/publish-seed.py --tools --tool python --tool bin --tool wheels --source-volume ci-deps-linux-arm64-cache --image <verified-runner-digest> --provenance <review-reference>`.
+Select each required directory under `tools/` explicitly with repeatable `--tool`
+arguments. No directory names are mandatory; selections must be unique simple
+names, exist, and pass ownership and contained-relative-link checks. Unselected
+directories are excluded. The publisher uses FICLONE where supported, hashes all files and
 atomically publishes a separate immutable snapshot. Agent Runtime data is never
 read. A changed distribution requires a new seed; missing/invalid seeds fail
 job preparation. This caches installation assets, not live vulnerability feeds
 or arbitrary project dependencies. No automatic cleanup removes active seeds.
+
+### Migrating older deployments
+
+This is a coordinated interface migration. The former built-in database CLI,
+SQL, environment export and database image publication have been removed.
+Existing deployments must remain on their pinned old images until the project
+adapter, wrapper and workflow are ready. Parameterizing the old database suffix
+is not a supported intermediate rollout.
+
+Existing immutable tool seeds remain readable. New tool publication requires
+`--tool <directory>` for each explicitly reviewed selection from the project's
+manifest; `--tool` is valid only with `--tools`. There is no mandatory tool name.
+
+Drain jobs, retain the old image references/Compose/private configuration, and
+switch the reviewed catalog, adapter, controller, runner and consumer together.
+Old jobs do not have the new durable descriptor; startup fails them closed for
+cleanup, so do not hot-upgrade with old jobs active. Rollback likewise requires
+a drained deployment. No persistent application database is migrated by this
+runner change. Old verification receipts are not promoted to new trusted ones.

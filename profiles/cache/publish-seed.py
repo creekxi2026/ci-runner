@@ -23,8 +23,14 @@ def main():
     p.add_argument('--image', required=True, help='Verified local runner image with workspace initializer')
     p.add_argument('--go-namespace')
     p.add_argument('--tools', action='store_true', help='Publish only immutable reviewed tool distributions')
+    p.add_argument('--tool', action='append', help='Directory to include with --tools; repeat for each directory')
     p.add_argument('--provenance', required=True, help='Reviewed revision/lock digests and why this source is trusted')
     args = p.parse_args()
+    if args.tools:
+        if not args.tool or len(args.tool) != len(set(args.tool)) or any(not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}', name) for name in args.tool):
+            p.error('--tools requires unique simple directory names via --tool')
+    elif args.tool:
+        p.error('--tool requires --tools')
     if not args.tools and not args.go_namespace:
         raise ValueError("Go namespace required for dependency publication")
     for name in [args.source_volume, args.work_volume]:
@@ -51,6 +57,8 @@ def main():
            '--entrypoint', 'python3', args.image]
     if args.tools:
         cmd += ['/opt/ci/tools-init.py', '--provenance', args.provenance]
+        for name in args.tool:
+            cmd += ['--tool', name]
     else:
         cmd += ['/opt/ci/workspace-init.py', 'import', '--go-namespace', args.go_namespace,
                 '--provenance', args.provenance]

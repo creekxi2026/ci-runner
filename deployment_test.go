@@ -12,7 +12,7 @@ func TestDeploymentRejectsMutableOrMismatchedImages(t *testing.T) {
 	source := strings.Repeat("c", 40)
 	t.Setenv("IMAGE_REVISION", source)
 	t.Setenv("RUNNER_IMAGE", "ghcr.io/creekxi2026/ci-runner@sha256:"+strings.Repeat("a", 64))
-	t.Setenv("POSTGRES_IMAGE", "postgres:17-bookworm@sha256:"+strings.Repeat("b", 64))
+	t.Setenv("CONTROLLER_IMAGE", "ghcr.io/creekxi2026/ci-runner-controller@sha256:"+strings.Repeat("b", 64))
 	old := imageRevision
 	imageRevision = source
 	t.Cleanup(func() { imageRevision = old })
@@ -39,7 +39,7 @@ func TestDeploymentAcceptsMatchingArm64Images(t *testing.T) {
 	t.Cleanup(func() { imageRevision = old })
 	t.Setenv("IMAGE_REVISION", source)
 	t.Setenv("RUNNER_IMAGE", "ghcr.io/creekxi2026/ci-runner@sha256:"+strings.Repeat("a", 64))
-	t.Setenv("POSTGRES_IMAGE", "postgres:17-bookworm@sha256:"+strings.Repeat("b", 64))
+	t.Setenv("CONTROLLER_IMAGE", "ghcr.io/creekxi2026/ci-runner-controller@sha256:"+strings.Repeat("b", 64))
 	calls := 0
 	withEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++

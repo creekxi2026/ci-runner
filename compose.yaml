@@ -17,7 +17,9 @@ services:
       SCALE_SET_NAME: ${SCALE_SET_NAME:-ci-mac-arm64-smoke}
       RUNNER_IMAGE: ${RUNNER_IMAGE:?Set digest-pinned RUNNER_IMAGE from the same deployment artifact}
       IMAGE_REVISION: ${IMAGE_REVISION:?Set source revision from the deployment artifact}
-      POSTGRES_IMAGE: ${POSTGRES_IMAGE:?Set a digest-pinned PostgreSQL image}
+      CONTROLLER_IMAGE: ${CONTROLLER_IMAGE}
+      SERVICES_CATALOG_FILE: /etc/ci-services/catalog.json
+      SERVICES_POLICY_FILE: /etc/ci-services/policy.json
       RUNNER_MAX_JOBS: ${RUNNER_MAX_JOBS:-3}
       RUNNER_IDLE_TIMEOUT_SECONDS: ${RUNNER_IDLE_TIMEOUT_SECONDS:-300}
       RUNNER_MAX_LIFETIME_SECONDS: ${RUNNER_MAX_LIFETIME_SECONDS:-3600}
@@ -27,7 +29,6 @@ services:
       DEPENDENCY_CACHE_SEED: ${DEPENDENCY_CACHE_SEED:-}
       DEPENDENCY_CACHE_VOLUME: ${DEPENDENCY_CACHE_VOLUME:-ci-deps-linux-arm64-cache}
       DEPENDENCY_CACHE_TRUST_LANE: ${DEPENDENCY_CACHE_TRUST_LANE:-}
-      POSTGRES_DATABASE_PREFIX: ${POSTGRES_DATABASE_PREFIX:-}
       PUBLIC_EGRESS_UPSTREAM_PROXY: ${PUBLIC_EGRESS_UPSTREAM_PROXY:-}
       PUBLIC_EGRESS_DOH_URL: ${PUBLIC_EGRESS_DOH_URL:-}
       HTTP_PROXY: ${PUBLIC_EGRESS_UPSTREAM_PROXY:-}
@@ -41,6 +42,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - job_work:/var/lib/ci-runner/work
+      - ${SERVICES_CONFIG_DIR:?Set reviewed service catalog/policy directory}:/etc/ci-services:ro
     networks: [egress]
     logging:
       driver: json-file
