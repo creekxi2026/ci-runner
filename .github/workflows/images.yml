@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
           cache: false
       - run: |
           go test -race ./...
@@ -53,11 +53,11 @@ jobs:
             --security-opt no-new-privileges --mount type=volume,dst=/tmp \
             --entrypoint /bin/sh "$runner_ref" -ec '
               /opt/ci/toolcache-init.sh /tmp/toolcache
-              test "$(/tmp/toolcache/go/1.26.6/arm64/bin/go version)" = "go version go1.26.6 linux/arm64"
+              test "$(/tmp/toolcache/go/1.26.9/arm64/bin/go version)" = "go version go1.26.9 linux/arm64"
               test "$(/tmp/toolcache/node/24.14.0/arm64/bin/node --version)" = "v24.14.0"
-              test -f /tmp/toolcache/go/1.26.6/arm64.complete
+              test -f /tmp/toolcache/go/1.26.9/arm64.complete
               test -f /tmp/toolcache/node/24.14.0/arm64.complete
-              test "$(readlink /tmp/toolcache/go/1.26.6/arm64)" = /opt/go
+              test "$(readlink /tmp/toolcache/go/1.26.9/arm64)" = /opt/go
               test "$(readlink /tmp/toolcache/node/24.14.0/arm64)" = /usr/local
               test ! -w /opt/go/bin/go
               test ! -w /usr/local/bin/node

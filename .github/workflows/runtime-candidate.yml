@@ -1,0 +1,56 @@
+name: Runtime candidate verification
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - cache-compatibility.json
+      - toolcache-init.sh
+      - tests/test_toolcache.py
+      - .github/workflows/runtime-candidate.yml
+permissions:
+  contents: read
+concurrency:
+  group: runtime-candidate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.9'
+          cache: false
+      - name: Verify generic runtime contracts
+        run: |
+          go test -race ./...
+          go vet ./...
+          python3 -m unittest discover -s tests
+          python3 scripts/verify-setup-go-patch.py
+          node scripts/check-cache-timer.cjs
+          node scripts/check-setup-go-action.cjs
+      - name: Build candidate without registry publication
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docker build --target runner --build-arg SOURCE_REVISION="$SOURCE_REVISION" -t runtime-candidate:review .
+          docker image inspect runtime-candidate:review --format '{{.Id}}'
+      - name: Prove offline toolcache and private job lifecycle
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --mount type=volume,dst=/tmp \
+            --entrypoint /bin/sh runtime-candidate:review -ec '
+              /opt/ci/toolcache-init.sh /tmp/toolcache
+              test "$(/tmp/toolcache/go/1.26.9/arm64/bin/go version)" = "go version go1.26.9 linux/arm64"
+              test "$(/tmp/toolcache/node/24.14.0/arm64/bin/node --version)" = "v24.14.0"
+              test -f /tmp/toolcache/go/1.26.9/arm64.complete
+              test -f /tmp/toolcache/node/24.14.0/arm64.complete
+              test "$(readlink /tmp/toolcache/go/1.26.9/arm64)" = /opt/go
+              test ! -w /opt/go/bin/go
+            '
+          CI_DISK_INTEGRATION_IMAGE=runtime-candidate:review go test -run '^TestJobDiskRuntime$' -v
+          bash scripts/check-shared-work-runtime.sh runtime-candidate:review
+          bash scripts/check-service-runtime.sh runtime-candidate:review

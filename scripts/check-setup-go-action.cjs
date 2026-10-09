@@ -16,7 +16,7 @@ function execute(directory, name) {
   const result = spawnSync(process.execPath, [path.join(directory, 'dist/setup/index.js')], {
     encoding: 'utf8', timeout: 30000,
     env: {...process.env, HOME:home, RUNNER_TEMP:home,
-      'INPUT_GO-VERSION':'1.26.6', 'INPUT_CHECK-LATEST':'false', INPUT_CACHE:'false', INPUT_TOKEN:'',
+      'INPUT_GO-VERSION':'1.26.9', 'INPUT_CHECK-LATEST':'false', INPUT_CACHE:'false', INPUT_TOKEN:'',
       GITHUB_ENV:path.join(home,'env'), GITHUB_OUTPUT:path.join(home,'output'), GITHUB_PATH:path.join(home,'path')}
   });
   assert.equal(result.status, 0, 'action process must succeed with the preinstalled toolchain');
