@@ -46,10 +46,10 @@ def main():
         raise ValueError('source cache and work volume must differ')
     if output('docker', 'ps', '-q', '--filter', 'volume='+args.source_volume).strip():
         raise ValueError('source cache is in use; stop scheduling its jobs before importing')
-    name = 'ci-seed-publish-'+uuid.uuid4().hex[:10]
+    publisher_name = 'ci-seed-publish-'+uuid.uuid4().hex[:10]
     # Controller owns the templates root. No whole workspace mount is given to
     # this helper, only protected templates and read-only cache data.
-    cmd = ['docker', 'run', '--name', name, '--network', 'none', '--read-only', '--user', '0',
+    cmd = ['docker', 'run', '--name', publisher_name, '--network', 'none', '--read-only', '--user', '0',
            '--cap-drop', 'ALL', '--cap-add', 'CHOWN', '--cap-add', 'DAC_OVERRIDE', '--cap-add', 'FOWNER',
            '--security-opt', 'no-new-privileges', '--memory', '512m', '--memory-swap', '512m', '--cpus', '1',
            '--mount', f'type=volume,src={args.work_volume},dst=/templates,volume-subpath=templates,volume-nocopy',
@@ -57,15 +57,15 @@ def main():
            '--entrypoint', 'python3', args.image]
     if args.tools:
         cmd += ['/opt/ci/tools-init.py', '--provenance', args.provenance]
-        for name in args.tool:
-            cmd += ['--tool', name]
+        for tool_name in args.tool:
+            cmd += ['--tool', tool_name]
     else:
         cmd += ['/opt/ci/workspace-init.py', 'import', '--go-namespace', args.go_namespace,
                 '--provenance', args.provenance]
     try:
         subprocess.run(cmd, check=True, timeout=600)
     finally:
-        subprocess.run(['docker', 'rm', '-f', name], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(['docker', 'rm', '-f', publisher_name], check=True, stdout=subprocess.DEVNULL)
 
 
 if __name__ == '__main__':
