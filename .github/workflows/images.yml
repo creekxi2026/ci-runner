@@ -18,6 +18,16 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+      - name: Check public image inputs before tool setup and build
+        timeout-minutes: 2
+        run: python3 scripts/image_preflight.py
+      - name: Check registry authentication before build
+        timeout-minutes: 1
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_TOKEN" | timeout 20s docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.26.9'
@@ -29,13 +39,9 @@ jobs:
           python3 scripts/verify-setup-go-patch.py
           node scripts/check-cache-timer.cjs
       - name: Publish candidate images
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p deployment
-          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          trap 'docker logout ghcr.io' EXIT
           docker buildx create --driver docker-container --use
           for target in controller runner; do
             docker buildx build --platform linux/arm64 --provenance=false --target "$target" \
@@ -77,3 +83,7 @@ jobs:
           path: deployment/
           if-no-files-found: error
           retention-days: 30
+      - name: Clear registry authentication
+        if: always()
+        timeout-minutes: 1
+        run: timeout 20s docker logout ghcr.io
