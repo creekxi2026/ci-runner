@@ -1,0 +1,18 @@
+name: Operator cache contracts
+on:
+  pull_request:
+    paths:
+      - profiles/cache/**
+      - tests/test_publish_seed_cleanup.py
+      - .github/workflows/operator-check.yml
+permissions:
+  contents: read
+jobs:
+  operator:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -p test_publish_seed_cleanup.py
