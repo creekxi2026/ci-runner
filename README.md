@@ -344,3 +344,24 @@ Old jobs do not have the new durable descriptor; startup fails them closed for
 cleanup, so do not hot-upgrade with old jobs active. Rollback likewise requires
 a drained deployment. No persistent application database is migrated by this
 runner change. Old verification receipts are not promoted to new trusted ones.
+
+## Early image dependency checks
+
+Image publication and runtime candidate CI run `python3 scripts/image_preflight.py`
+immediately after checkout, before tool setup, tests and builds. It derives the
+fixed snapshot `InRelease` URLs and digest-pinned base images from `Dockerfile`,
+performs actual bounded GETs (not HEAD), rejects HTML/error responses, and reads
+registry manifests. Four probes run concurrently; each has a 20-second deadline
+and the workflow step has a two-minute limit. Failures identify the specific
+dependency and stop the expensive path. A separate PR job tests failure handling
+even when a public service is unavailable.
+
+Publication also checks GHCR login before building and logs out on failure or
+success. PR checks receive no publication credentials. Login proves authentication,
+not package write permission; actual push remains authoritative. Snapshot format
+checks do not replace apt's signature verification, and manifest reads do not
+prove every image layer is downloadable. Runner archive downloads, apt package
+downloads, later service availability and post-publication runtime checks still
+have to succeed. These probes use the hosted job's network; Docker build workers
+can experience different failures. This change does not switch snapshot dates,
+relax digests, roll out controllers or modify consumer services.
