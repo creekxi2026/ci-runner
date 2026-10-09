@@ -19,7 +19,7 @@ retained. Run `python3 scripts/verify-setup-go-patch.py` to reverse the one patc
 in memory and verify every original file byte. To reproduce, download those five
 files from the pinned upstream commit, then run that script with `--apply`.
 Run `node scripts/check-cache-timer.cjs` for real child-process lifetime checks.
-With Go 1.26.6 preinstalled in RUNNER_TOOL_CACHE, run
+With Go 1.26.9 preinstalled in RUNNER_TOOL_CACHE, run
 `node scripts/check-setup-go-action.cjs` to execute the distribution and verify
 its matcher registration and diagnostic parsing. The regression also proves
 that a missing matcher fails validation even when Node exits successfully.

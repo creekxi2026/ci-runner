@@ -10,5 +10,5 @@ seed() {
  [ "$(readlink "$target")" = "$3" ]
  touch "$target.complete"
 }
-seed go 1.26.6 "$go_root"
+seed go 1.26.9 "$go_root"
 seed node 24.14.0 "$node_root"

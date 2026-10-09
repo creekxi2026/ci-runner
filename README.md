@@ -46,7 +46,17 @@ Registry multi-tag publication is **not atomic**: a failed promotion can leave a
 - A new workspace must have at least **5 GiB free**. This check is not a quota or reservation; concurrent writers can still fill the disk. Controllers need CHOWN/DAC_OVERRIDE/FOWNER for private UID directories and cleanup of restrictive job file modes; workers retain cap-drop ALL. No transient disk-initializer container is needed.
 - Runner memory stays **4 GiB**, with `MemorySwap` also 4 GiB (no extra swap). Proxy memory is **128 MiB**, controller **256 MiB**. Each service has operator-bounded memory/CPU/PID/data/startup limits; service, adapter, namespace and firewall shares cannot exceed that configured service budget. Pool limits are ceilings, not reservations, and must fit the host's capacity. Service/adapter logs are disabled to keep bootstrap/consumer credentials out of logs; runner/proxy logs rotate at 2 × 5 MiB.
 - Dynamic runner/proxy/service/helper containers appear under the separate `ci-jobs` Compose project, with per-job service and role labels. These labels organize the UI; the controller owns lifecycle. Do not use `compose down` on that group. Deployment Compose projects remain separate, so `up --remove-orphans` on a deployment cannot select active jobs.
-- The pinned Go 1.26.6 and Node 24.14.0 toolchains are image-managed. Each job seeds private toolcache links to read-only image binaries; setup-go/setup-node can reuse these versions without downloading them. Other requested versions still require public network access.
+- The pinned Go 1.26.9 and Node 24.14.0 toolchains are image-managed. Each job seeds private toolcache links to read-only image binaries; setup-go/setup-node can reuse these versions without downloading them. Other requested versions still require public network access.
+
+Runtime changes are first exercised by `Runtime candidate verification` on an
+isolated hosted ARM64 worker. It builds the candidate, checks the offline
+toolcache, and runs disk/shared-work/service lifecycle fixtures without registry
+publication or registration in an existing scale set. A green candidate is not
+a deployment: the image workflow still publishes a coherent controller/runner
+pair, and operators must separately validate new tools/dependency seeds and the
+consuming project's version contracts before selecting that pair. Keep existing
+deployments on their recorded digests during this validation; never reuse an old
+dependency seed across a changed toolchain compatibility tuple.
 - Runner images default to `GOPROXY=https://goproxy.cn` with `GOSUMDB=sum.golang.org`; checksum verification remains enabled. Workflows can override these defaults. Set appropriate `GOPRIVATE`/`GONOPROXY`/`GONOSUMDB` before requesting private modules to avoid disclosing private module paths to public services. This setting affects Go modules only, not GitHub, Node or other traffic.
 - Immutable images remain in the Docker daemon until explicitly retired. Updates are cloud-built; no local build cache is needed. Review and remove exact unused CI image references when appropriate; there is no global pruning or cleanup of other deployments.
 - Jobs receive `CI_RUNNER_IMAGE`, `CI_SERVICES_FILE` and `CI_SERVICES_FINGERPRINT`, plus `CI_TOOLS_SEED` and, when configured, `CI_DEPENDENCY_SEED`. Workflows bind reusable verification evidence to the runner image, service fingerprint and seeds. Service/adapter image references are in the read-only descriptor; the runner exports no database-specific image variable. These values grant no access to the controller or other jobs.
