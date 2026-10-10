@@ -35,6 +35,11 @@ Registry multi-tag publication is **not atomic**: a failed promotion can leave a
 
 ## Lifecycle and storage
 
+Shared-host operations follow the [fixed-volume and test-cleanup rules in
+AGENTS.md](AGENTS.md#fixed-volumes-and-test-cleanup): reuse the named work/cache
+volumes, isolate jobs with subdirectories, and retire owned temporary resources
+after verification. Do not introduce date- or task-named volumes during upgrades.
+
 - Only the controller runs without demand. Each job receives a private runner, proxy and internal IPv4/IPv6 network. Project services are **opt-in per job**, selected from a trusted catalog; an empty catalog starts no services. Dependency caches are **off by default**; opt-in persistent storage is described below.
 - A failed new runner or transient GitHub polling/acknowledgement failure does not tear down other jobs. Startup adopts existing live jobs before acquiring a GitHub session. Cleanup and lifetime checks operate independently of GitHub polling.
 - Idle, unassigned runners expire after `RUNNER_IDLE_TIMEOUT_SECONDS` (default **300**). All runners have an absolute creation-based lifetime of `RUNNER_MAX_LIFETIME_SECONDS` (default **3600**); controller restart does not reset it. The job-start hook prevents idle reclamation racing assignment; its job-writable marker is not a security credential.
