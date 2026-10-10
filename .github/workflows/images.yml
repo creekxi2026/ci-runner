@@ -2,7 +2,7 @@ name: Cloud ARM64 images
 on:
   push:
     branches: [main]
-    paths-ignore: ['README.md', 'docs/**']
+    paths-ignore: ['README.md', 'AGENTS.md', 'docs/**']
   workflow_dispatch:
 permissions:
   contents: read
