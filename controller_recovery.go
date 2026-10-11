@@ -31,6 +31,8 @@ type jobState struct {
 	disk                         bool
 	shared                       bool
 	diagnosticsCaptured          bool
+	cacheEvent                   *scaleset.JobStarted
+	cacheAttempted               bool
 	idleExec                     string // retained across ambiguous start/inspect responses
 }
 type messageProgress struct {
@@ -103,6 +105,7 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 	if err := f.removeServices(n); err != nil {
 		return
 	}
+	f.saveIncremental(n, j)
 	if j.disk {
 		if err := f.removeJobDisk(n); err != nil {
 			return

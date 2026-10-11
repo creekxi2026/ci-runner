@@ -3,6 +3,16 @@ on:
   pull_request:
     paths:
       - Dockerfile
+      - incremental_*.go
+      - controller.go
+      - controller_recovery.go
+      - workspace.go
+      - workspace-init.py
+      - shared_work_runtime_test.go
+      - scripts/runtime_candidate.py
+      - tests/test_runtime_candidate.py
+      - compose.yaml
+      - examples/cache/**
       - cache-compatibility.json
       - toolcache-init.sh
       - tests/test_toolcache.py
@@ -31,6 +41,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Check public image inputs before tool setup and build
         timeout-minutes: 2
         run: python3 scripts/image_preflight.py
@@ -46,11 +57,11 @@ jobs:
           python3 scripts/verify-setup-go-patch.py
           node scripts/check-cache-timer.cjs
           node scripts/check-setup-go-action.cjs
-      - name: Build candidate without registry publication
+      - name: Select verified runner or build changed image inputs
         env:
           SOURCE_REVISION: ${{ github.event.pull_request.head.sha }}
         run: |
-          docker build --target runner --build-arg SOURCE_REVISION="$SOURCE_REVISION" -t runtime-candidate:review .
+          python3 scripts/runtime_candidate.py --source-revision "$SOURCE_REVISION"
           docker image inspect runtime-candidate:review --format '{{.Id}}'
       - name: Prove offline toolcache and private job lifecycle
         run: |
@@ -68,3 +79,16 @@ jobs:
           CI_DISK_INTEGRATION_IMAGE=runtime-candidate:review go test -run '^TestJobDiskRuntime$' -v
           bash scripts/check-shared-work-runtime.sh runtime-candidate:review
           bash scripts/check-service-runtime.sh runtime-candidate:review
+
+      - name: Verify native Go cache reuse and source invalidation offline
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$RUNNER_TEMP/native-cache-test"
+          # Go executes its generated test binary under TMPDIR; Docker tmpfs
+          # defaults to noexec. This applies only to the isolated test container.
+          docker run --rm --network none --read-only --user 0 \
+            --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,exec,nosuid,nodev,size=768m \
+            --mount "type=bind,src=$RUNNER_TEMP/native-cache-test,dst=/test,readonly" \
+            -e HOME=/tmp -e TMPDIR=/tmp -e CI_NATIVE_CACHE_TEST=1 \
+            --entrypoint /test runtime-candidate:review \
+            -test.run '^TestIncremental' -test.v -test.timeout=180s

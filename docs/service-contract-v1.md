@@ -264,3 +264,15 @@ to drop privilege; it never gets NET_ADMIN. Init/check have all capabilities
 removed. No service restart policy is installed: stopped tmpfs services fail
 closed instead of resetting data under the same lease. Controller recovery
 preserves a live instance and rejects changed configuration/ownership.
+
+## Native cache persistence is separate from service leases
+
+The optional incremental cache policy is operator-owned generic directory metadata,
+not a service adapter API. Neither service acquisition nor project outputs can
+publish caches or supply trusted source identity. The controller validates the
+GitHub run/job/branch independently and removes workers and service writers before
+reading cache directories. No service/worker receives the snapshot volume mount.
+Disabling/missing caches cannot bypass service validation or change test results.
+See the README native incremental cache contract for bounds, private copies,
+compatibility, rollback and fixed-volume ownership. Consumer-specific compiler or
+transform paths belong in the operator policy, never this generic core.

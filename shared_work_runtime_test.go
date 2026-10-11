@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -65,6 +68,7 @@ func TestSharedWorkRuntime(t *testing.T) {
 			t.Fatal(e)
 		}
 		if e := f.prepareWorkspace(ctx, n); e != nil {
+			logWorkspaceFixtureFailure(t, n+"-fw")
 			t.Fatal(e)
 		}
 		if e := f.createContext(ctx, n, image, "1001", []string{"sleep", "120"}, nil, h, "none"); e != nil {
@@ -162,4 +166,51 @@ func TestSharedWorkRuntime(t *testing.T) {
 		t.Fatal("shared volume removed")
 	}
 	t.Log("two pools: independent three and one, shared disk subpaths, worker isolation, grouping, live restart, orphan cleanup, reusable slots passed")
+}
+
+// Only the isolated, credential-free runtime fixture may print raw initializer
+// stderr. Capture it before t.Fatal runs cleanup and deletes the failed helper.
+func logWorkspaceFixtureFailure(t *testing.T, helper string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var inspect struct {
+		State struct {
+			ExitCode  int
+			OOMKilled bool
+			Status    string
+		}
+	}
+	if err := dockerContext(ctx, "GET", "/containers/"+helper+"/json", nil, &inspect); err != nil {
+		t.Logf("workspace fixture state unavailable: %v", err)
+	} else {
+		t.Logf("workspace fixture state: %+v", inspect.State)
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://docker/v1.47/containers/"+helper+"/logs?stdout=true&stderr=true&tail=80", nil)
+	resp, err := engine.Do(req)
+	if err != nil {
+		t.Logf("workspace fixture logs unavailable: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("workspace fixture logs HTTP %d", resp.StatusCode)
+		return
+	}
+	logs := io.LimitReader(resp.Body, 64*1024)
+	for {
+		var header [8]byte
+		if _, err := io.ReadFull(logs, header[:]); err != nil {
+			return
+		}
+		n := binary.BigEndian.Uint32(header[4:])
+		if n > 64*1024 || (header[0] != 1 && header[0] != 2) {
+			return
+		}
+		data := make([]byte, n)
+		if _, err := io.ReadFull(logs, data); err != nil {
+			return
+		}
+		t.Logf("workspace initializer: %s", data)
+	}
 }

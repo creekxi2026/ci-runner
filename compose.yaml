@@ -24,6 +24,7 @@ services:
       RUNNER_IDLE_TIMEOUT_SECONDS: ${RUNNER_IDLE_TIMEOUT_SECONDS:-300}
       RUNNER_MAX_LIFETIME_SECONDS: ${RUNNER_MAX_LIFETIME_SECONDS:-3600}
       RUNNER_ALLOWED_EVENTS: ${RUNNER_ALLOWED_EVENTS:-workflow_dispatch}
+      INCREMENTAL_CACHE_POLICY_FILE: ${INCREMENTAL_CACHE_POLICY_FILE:-}
       DEPENDENCY_CACHE_MODE: ${DEPENDENCY_CACHE_MODE:-off}
       TOOLS_SEED: ${TOOLS_SEED:-}
       DEPENDENCY_CACHE_SEED: ${DEPENDENCY_CACHE_SEED:-}
@@ -42,6 +43,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - job_work:/var/lib/ci-runner/work
+      - dependency_cache:/var/lib/ci-runner/cache
       - ${SERVICES_CONFIG_DIR:?Set reviewed service catalog/policy directory}:/etc/ci-services:ro
     networks: [egress]
     logging:
@@ -56,4 +58,8 @@ secrets:
 volumes:
   job_work:
     name: ci-work-linux-arm64
+    external: true
+
+  dependency_cache:
+    name: ci-deps-linux-arm64-cache
     external: true
