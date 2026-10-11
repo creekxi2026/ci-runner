@@ -50,6 +50,15 @@ after verification. Do not introduce date- or task-named volumes during upgrades
 - Cleanup removes job containers first, then only that job's directory; it releases the pool slot after cleanup and deregistration. Restart preserves live jobs and reclaims interrupted provisioning, including directory-only orphans. Legacy per-job disks are recovered and retired without deleting active work. The shared volume is external to Compose; it and the independent dependency cache survive job cleanup and deployment `compose down -v`. Removing job files releases filesystem space for reuse; it does not promise immediate shrinking of the host's OrbStack VM disk image.
 - A new workspace must have at least **5 GiB free**. This check is not a quota or reservation; concurrent writers can still fill the disk. Controllers need CHOWN/DAC_OVERRIDE/FOWNER for private UID directories and cleanup of restrictive job file modes; workers retain cap-drop ALL. No transient disk-initializer container is needed.
 - Runner memory stays **4 GiB**, with `MemorySwap` also 4 GiB (no extra swap). Proxy memory is **128 MiB**, controller **256 MiB**. Each service has operator-bounded memory/CPU/PID/data/startup limits; service, adapter, namespace and firewall shares cannot exceed that configured service budget. Pool limits are ceilings, not reservations, and must fit the host's capacity. Service/adapter logs are disabled to keep bootstrap/consumer credentials out of logs; runner/proxy logs rotate at 2 × 5 MiB.
+- The short-lived workspace initializer has a **1 GiB memory/swap ceiling** (no extra swap), with its existing 2 CPU/PID limits. Cold template copying and syncing charges filesystem cache to this container; the previous 256 MiB ceiling caused an observed OOM on hosted CI. This does not change worker or service budgets.
+
+PR runtime verification reuses the verified digest pinned in
+`scripts/runtime_candidate.py` when the reviewed Dockerfile and all runner image
+inputs are unchanged. The candidate Go controller and all lifecycle/native-cache
+tests still run. Changed image inputs (or an unavailable pinned image) require
+a full Docker build. This avoids repeatedly downloading Ubuntu snapshot packages
+for controller-only changes; it is not a cache of successful test results.
+Main image publication still builds and verifies a new coherent image pair.
 - Dynamic runner/proxy/service/helper containers appear under the separate `ci-jobs` Compose project, with per-job service and role labels. These labels organize the UI; the controller owns lifecycle. Do not use `compose down` on that group. Deployment Compose projects remain separate, so `up --remove-orphans` on a deployment cannot select active jobs.
 - The pinned Go 1.26.9 and Node 24.14.0 toolchains are image-managed. Each job seeds private toolcache links to read-only image binaries; setup-go/setup-node can reuse these versions without downloading them. Other requested versions still require public network access.
 

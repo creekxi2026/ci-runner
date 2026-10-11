@@ -27,7 +27,10 @@ func (f *fleet) prepareWorkspace(ctx context.Context, n string) error {
 	}
 	h := secure()
 	h["ReadonlyRootfs"] = true
-	h["Memory"] = 256 * 1024 * 1024
+	// Cold runner template publication also charges filesystem page cache to
+	// this cgroup. The ~425 MiB runner tree can exceed a 256 MiB limit while
+	// copying and syncing on a non-reflink filesystem (verified OOM in CI).
+	h["Memory"] = 1024 * 1024 * 1024
 	h["MemorySwap"] = h["Memory"]
 	h["CapAdd"] = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER"}
 	h["Mounts"] = []obj{

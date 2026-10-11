@@ -6,6 +6,11 @@ on:
       - incremental_*.go
       - controller.go
       - controller_recovery.go
+      - workspace.go
+      - workspace-init.py
+      - shared_work_runtime_test.go
+      - scripts/runtime_candidate.py
+      - tests/test_runtime_candidate.py
       - compose.yaml
       - examples/cache/**
       - cache-compatibility.json
@@ -36,6 +41,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Check public image inputs before tool setup and build
         timeout-minutes: 2
         run: python3 scripts/image_preflight.py
@@ -51,11 +57,11 @@ jobs:
           python3 scripts/verify-setup-go-patch.py
           node scripts/check-cache-timer.cjs
           node scripts/check-setup-go-action.cjs
-      - name: Build candidate without registry publication
+      - name: Select verified runner or build changed image inputs
         env:
           SOURCE_REVISION: ${{ github.event.pull_request.head.sha }}
         run: |
-          docker build --target runner --build-arg SOURCE_REVISION="$SOURCE_REVISION" -t runtime-candidate:review .
+          python3 scripts/runtime_candidate.py --source-revision "$SOURCE_REVISION"
           docker image inspect runtime-candidate:review --format '{{.Id}}'
       - name: Prove offline toolcache and private job lifecycle
         run: |
