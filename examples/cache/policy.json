@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "repository": "example/project",
+  "branch": "main",
+  "workflow": ".github/workflows/check.yml",
+  "job": "compile",
+  "paths": [".cache/compiler", ".cache/transform"],
+  "max_bytes": 1073741824,
+  "max_entries": 50000,
+  "volume_labels": {
+    "ci-runner.cache-schema": "v2-linux-arm64-trusted-manual",
+    "ci-runner.cache-owner": "ci-runner",
+    "ci-runner.cache-repository": "https://github.com/example/runtime",
+    "ci-runner.cache-lane": "reviewed-main"
+  }
+}

@@ -74,6 +74,7 @@ type fleet struct {
 	allowedEvents        map[string]bool
 	services             *serviceManager
 	cache                *dependencyCache
+	incremental          *incrementalCache
 	seed, toolsSeed      string
 	work                 *sharedWork
 	jobs                 map[string]string
@@ -210,6 +211,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if err = f.prepareWorkspace(ctx, name); err != nil {
 		return err
 	}
+	f.restoreIncremental(ctx, name)
 	if f.seed != "" {
 		env = append(env, "CI_DEPENDENCY_SEED="+f.seed)
 	}
@@ -290,7 +292,14 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	}
 	// JobStarted is scheduler assignment, not proof that an offline listener
 	// has run user code. Only the atomic job-start hook arbitrates idle cleanup.
+	for _, event := range msg.JobStartedMessages {
+		f.cacheJobEvent(event)
+	}
 	for _, event := range msg.JobCompletedMessages {
+		if event == nil {
+			continue
+		}
+		f.cacheJobEvent(&scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase})
 		if n, ok := f.snapshot()[event.RunnerName]; ok {
 			f.cleanup(event.RunnerName, n)
 			if _, pending := f.snapshot()[event.RunnerName]; pending {
@@ -408,6 +417,12 @@ func run() error {
 	defer f.work.Close()
 	if err = f.verifyWorkMount(ctx); err != nil {
 		return err
+	}
+	if err = f.openIncrementalCache(ctx, os.Getenv("INCREMENTAL_CACHE_POLICY_FILE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL")); err != nil {
+		return err
+	}
+	if f.incremental != nil {
+		defer f.incremental.root.Close()
 	}
 	f.changes = make(chan struct{}, 1)
 	f.demandSource = scaleSetDemand(c, os.Getenv("SCALE_SET_NAME"), func() int { _, id := f.api(); return id })

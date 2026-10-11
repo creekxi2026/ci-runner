@@ -150,8 +150,10 @@ The controller creates or adopts the readable named volume
 Deployment, exact repository and trust lane remain in strict `ci-runner.cache-*`
 labels under the `v2-linux-arm64-trusted-manual` schema. They are not discarded
 when the name loses its hash. Reusing a name with foreign labels fails closed;
-choose a separate explicit name for a different deployment/trust scope. No volume
-is created or mounted when caching is off, and job cleanup never deletes that dependency volume.
+choose a separate explicit name for a different deployment/trust scope. When shared caching is off, workers do not mount the dependency volume.
+Compose still mounts the existing fixed cache volume only into the controller;
+incremental publication remains separately opt-in. Job cleanup never deletes
+that dependency volume.
 
 Controller jobs and `profiles/cache/compose.yaml` use the **same** initializer,
 `data` layout, `cache-env.sh`, and immutable optional tool mount. The standalone
@@ -370,3 +372,70 @@ downloads, later service availability and post-publication runtime checks still
 have to succeed. These probes use the hosted job's network; Docker build workers
 can experience different failures. This change does not switch snapshot dates,
 relax digests, roll out controllers or modify consumer services.
+
+### Native incremental cache directories (opt-in)
+
+The runner can retain operator-selected native compiler/transform cache directories
+on the existing `ci-deps-linux-arm64-cache` volume. This is directory persistence,
+not a new build graph or test-result cache: tools still own their keys, dependency
+tracking and invalidation. Jobs receive private copies; PRs cannot update the
+shared snapshot. No remote cache service or worker Docker access is involved.
+
+Copy `examples/cache/policy.json` into the reviewed operator configuration mounted
+at `/etc/ci-services`, and set `INCREMENTAL_CACHE_POLICY_FILE` to that file. The
+example uses dummy generic paths; the consuming project/operator chooses its
+native cache directories and reviewed producer workflow/job. The default is off.
+The Compose file now requires both existing fixed volumes, even with the option
+off; it does not create them or change their labels. Check actual volume labels,
+root ownership/permissions and controller mounts before opting in. The policy's
+four cache-volume labels must exactly match the existing volume. Use private
+workspace mode (`DEPENDENCY_CACHE_MODE=off`) with an immutable dependency seed.
+Do not enable shared writable cache mode on a mixed PR/push fleet.
+
+Only the configured repository's successful push job on the current protected
+branch may publish. The controller uses its existing credential to read the run,
+current attempt's complete job list and protected branch: runner ID/name, SHA,
+repository, workflow path and job name must all agree. This configuration asserts
+that the reviewed workflow actually tests that source and native cache content;
+it must not select a job checking out untrusted alternate sources. A completed
+build job is sufficient; the cache does not attest later workflow stages. Failed,
+cancelled, PR, missing-event, stale-attempt, superseded-head and unavailable API
+cases simply do not publish. No additional worker credential is introduced.
+
+Publication runs after deletion of all job writers and before private disk cleanup.
+If the janitor wins the race with completion, it can use authenticated started
+metadata and the same REST check. Missing/incomplete evidence, including after a
+controller restart, produces a safe cache miss; cleanup never waits for GitHub to
+become ready. Saves have a 30-second budget; restores have 20 seconds. Busy cache
+operations are skipped instead of waiting on a lock. Individual filesystem I/O
+still depends on the host filesystem. Errors affect cache reuse, not job results.
+
+Only declared `.cache/` directories are copied. Symlinks, hard links, devices,
+excess depth, files over 256 MiB, more than 50,000 entries, oversized metadata or
+more than 1 GiB are rejected. Linux reflinks are used when supported, otherwise
+bounded copies. Payloads are disposable (no fsync per native entry); crash-truncated data is
+rejected on restore and rebuilt by the tool. Snapshot files are root-only, checked
+for corruption, and published
+by an atomic pointer update. Two committed snapshots at most are retained per
+controller owner (plus bounded in-flight staging); the next save collects orphan
+staging. Runtime image, tools/seed and policy changes invalidate the snapshot.
+Go/Jest, not the controller, decide which individual native entries remain usable.
+A failed restore can leave a partially populated cache, in which case the native
+tool rebuilds misses; unrelated workspace files are never replaced.
+
+Drain active jobs before changing the controller images/configuration. Keep the
+old image pair, dependency seed and declarations for rollback. Disable publication
+by clearing `INCREMENTAL_CACHE_POLICY_FILE`; existing jobs keep private copies and
+new jobs fall back to the immutable seed. Retire only this owner's
+`incremental-v1/<deployment-owner>` snapshots after draining and verifying references;
+never delete/prune either fixed volume or other owners' data.
+
+Verification: `go test -race ./...`, `go vet ./...`, and Python contracts. The
+opt-in `TestIncrementalNativeGoRuntime` uses an installed Go tool with networking
+disabled and proves native `(cached)` reuse after save/private-cache deletion/restore,
+then proves a source change invalidates that result. An optional
+`CI_JEST_BINARY` fixture uses the consumer-provided installed Jest (never a core
+dependency) and proves native transforms are reused while tests still execute,
+then invalidates a changed source file. Run it with
+`CI_NATIVE_CACHE_TEST=1 go test -run '^TestIncrementalNativeGoRuntime$' -v` in an
+isolated fixture directory. Local/static evidence is not live fleet acceptance.

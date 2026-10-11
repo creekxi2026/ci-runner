@@ -3,6 +3,11 @@ on:
   pull_request:
     paths:
       - Dockerfile
+      - incremental_*.go
+      - controller.go
+      - controller_recovery.go
+      - compose.yaml
+      - examples/cache/**
       - cache-compatibility.json
       - toolcache-init.sh
       - tests/test_toolcache.py
@@ -68,3 +73,14 @@ jobs:
           CI_DISK_INTEGRATION_IMAGE=runtime-candidate:review go test -run '^TestJobDiskRuntime$' -v
           bash scripts/check-shared-work-runtime.sh runtime-candidate:review
           bash scripts/check-service-runtime.sh runtime-candidate:review
+
+      - name: Verify native Go cache reuse and source invalidation offline
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$RUNNER_TEMP/native-cache-test"
+          docker run --rm --network none --read-only --user 0 \
+            --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,size=768m \
+            --mount "type=bind,src=$RUNNER_TEMP/native-cache-test,dst=/test,readonly" \
+            -e HOME=/tmp -e TMPDIR=/tmp -e CI_NATIVE_CACHE_TEST=1 \
+            --entrypoint /test runtime-candidate:review \
+            -test.run '^TestIncremental' -test.v -test.timeout=180s
