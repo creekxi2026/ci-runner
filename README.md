@@ -421,8 +421,12 @@ still depends on the host filesystem. Errors affect cache reuse, not job results
 
 Only declared `.cache/` directories are copied. Symlinks, hard links, devices,
 excess depth, files over 256 MiB, more than 50,000 entries, oversized metadata or
-more than 1 GiB are rejected. Linux reflinks are used when supported, otherwise
-bounded copies. Payloads are disposable (no fsync per native entry); crash-truncated data is
+more than 1 GiB are rejected.
+The 4 MiB traversal metadata budget counts JSON-escaped path bytes plus a bounded
+per-entry digest/punctuation allowance, rather than assuming every ASCII byte
+needs six-byte escaping. The separate 8 MiB serialized manifest limit remains.
+Linux reflinks are used when supported, otherwise bounded copies. Payloads are
+disposable (no fsync per native entry); crash-truncated data is
 rejected on restore and rebuilt by the tool. Snapshot files are root-only, checked
 for corruption, and published
 by an atomic pointer update. Two committed snapshots at most are retained per
