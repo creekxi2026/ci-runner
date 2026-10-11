@@ -13,8 +13,9 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sourc
  && printf '%s\n' \
  'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261004T000000Z/ bookworm main' \
  'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261004T000000Z/ bookworm-security main' > /etc/apt/sources.list \
- && apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+ && apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 && rm -rf /var/lib/apt/lists/*
 COPY --from=build /controller /controller
+COPY git-cache.py /opt/ci/git-cache.py
 ENTRYPOINT ["/controller"]
 
 FROM node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8 AS node

@@ -382,6 +382,15 @@ have to succeed. These probes use the hosted job's network; Docker build workers
 can experience different failures. This change does not switch snapshot dates,
 relax digests, roll out controllers or modify consumer services.
 
+### Git object cache (default for private jobs)
+
+The controller now seeds independent Git repositories from its own incrementally
+fetched object cache on the existing fixed cache volume. Normal checkout still
+selects and verifies the requested SHA. Workers cannot write the persistent
+cache; COW is attempted and ordinary private copying is the measured fallback.
+See [the storage, trust, capacity and rollback contract](docs/git-object-cache.md).
+`GIT_OBJECT_CACHE_MODE=off` restores cold checkout without deleting any volume.
+
 ### Native incremental cache directories (opt-in)
 
 The runner can retain operator-selected native compiler/transform cache directories
