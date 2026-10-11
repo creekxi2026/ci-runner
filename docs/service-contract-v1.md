@@ -273,6 +273,8 @@ publish caches or supply trusted source identity. The controller validates the
 GitHub run/job/branch independently and removes workers and service writers before
 reading cache directories. No service/worker receives the snapshot volume mount.
 Disabling/missing caches cannot bypass service validation or change test results.
+Traversal metadata is bounded by actual JSON-escaped path lengths plus per-entry
+overhead; ordinary hashed filenames do not consume a worst-case escaping budget.
 See the README native incremental cache contract for bounds, private copies,
 compatibility, rollback and fixed-volume ownership. Consumer-specific compiler or
 transform paths belong in the operator policy, never this generic core.

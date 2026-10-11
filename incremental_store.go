@@ -27,6 +27,25 @@ type cacheBudget struct {
 	metadata int
 }
 
+func (b *cacheBudget) addMetadata(name string) error {
+	if len(name) > 1024 {
+		return fmt.Errorf("cache path length limit")
+	}
+	// Count the actual JSON-escaped key, not six bytes for every ASCII byte.
+	// Native caches commonly have thousands of long hexadecimal filenames.
+	// The allowance covers the digest and JSON punctuation; directories count
+	// too, conservatively bounding traversal even though they aren't in Files.
+	encoded, err := json.Marshal(name)
+	if err != nil {
+		return err
+	}
+	b.metadata += len(encoded) + 80
+	if b.metadata > 4<<20 {
+		return fmt.Errorf("cache metadata limit (entries=%d, bytes=%d, max=%d)", b.entries, b.metadata, 4<<20)
+	}
+	return nil
+}
+
 func cacheGID(uid int) int {
 	if uid == os.Getuid() {
 		return os.Getgid()
@@ -94,9 +113,8 @@ func cacheWalk(ctx context.Context, src, dst *os.Root, rel string, b *cacheBudge
 				return fmt.Errorf("cache entry limit")
 			}
 			name := rel + "/" + entry.Name()
-			b.metadata += len(name)*6 + 80
-			if len(name) > 1024 || b.metadata > 4<<20 {
-				return fmt.Errorf("cache metadata limit")
+			if e := b.addMetadata(name); e != nil {
+				return e
 			}
 			st, e := src.Lstat(name)
 			if e != nil {
