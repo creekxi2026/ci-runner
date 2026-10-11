@@ -4,6 +4,10 @@ on:
     paths:
       - Dockerfile
       - incremental_*.go
+      - git_cache.go
+      - git_cache_test.go
+      - git-cache.py
+      - tests/test_git_cache.py
       - controller.go
       - controller_recovery.go
       - workspace.go
@@ -57,6 +61,13 @@ jobs:
           python3 scripts/verify-setup-go-patch.py
           node scripts/check-cache-timer.cjs
           node scripts/check-setup-go-action.cjs
+      - name: Verify controller Git cache runtime
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docker build --target controller --build-arg "SOURCE_REVISION=$SOURCE_REVISION" -t git-cache-controller:review .
+          docker run --rm --read-only --network none --entrypoint python3 git-cache-controller:review /opt/ci/git-cache.py --help
+          docker run --rm --read-only --network none --entrypoint git git-cache-controller:review --version
       - name: Select verified runner or build changed image inputs
         env:
           SOURCE_REVISION: ${{ github.event.pull_request.head.sha }}

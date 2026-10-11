@@ -9,7 +9,7 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     security_opt: [no-new-privileges:true]
-    mem_limit: 256m
+    mem_limit: 1g
     cpus: 0.5
     pids_limit: 128
     environment:
@@ -25,6 +25,8 @@ services:
       RUNNER_MAX_LIFETIME_SECONDS: ${RUNNER_MAX_LIFETIME_SECONDS:-3600}
       RUNNER_ALLOWED_EVENTS: ${RUNNER_ALLOWED_EVENTS:-workflow_dispatch}
       INCREMENTAL_CACHE_POLICY_FILE: ${INCREMENTAL_CACHE_POLICY_FILE:-}
+      GIT_OBJECT_CACHE_MODE: ${GIT_OBJECT_CACHE_MODE:-auto}
+      GIT_OBJECT_CACHE_REFS: ${GIT_OBJECT_CACHE_REFS:-refs/heads/main}
       DEPENDENCY_CACHE_MODE: ${DEPENDENCY_CACHE_MODE:-off}
       TOOLS_SEED: ${TOOLS_SEED:-}
       DEPENDENCY_CACHE_SEED: ${DEPENDENCY_CACHE_SEED:-}

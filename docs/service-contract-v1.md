@@ -6,6 +6,12 @@ The previous parameterized database API has been removed from the core.
 The controller must not interpret database names,
 SQL, framework/tool names, or application environment variables.
 
+The separate [Git object cache](git-object-cache.md) is controller-owned storage,
+not a service or worker-selected catalog capability. It seeds only each job's
+private default checkout path; it adds no worker mount, credential, service
+environment, admission bypass or successful-verification claim. Projects retain
+ownership of checkout SHA/history and protected-source validation.
+
 ## Catalog and trust
 
 An operator installs a reviewed service catalog in a controller-only read-only

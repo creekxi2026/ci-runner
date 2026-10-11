@@ -75,6 +75,7 @@ type fleet struct {
 	services             *serviceManager
 	cache                *dependencyCache
 	incremental          *incrementalCache
+	gitCache             *gitObjectCache
 	seed, toolsSeed      string
 	work                 *sharedWork
 	jobs                 map[string]string
@@ -212,6 +213,9 @@ func (f *fleet) start(ctx context.Context) (err error) {
 		return err
 	}
 	f.restoreIncremental(ctx, name)
+	if err = f.prepareGitObjects(ctx, name); err != nil {
+		return err
+	}
 	if f.seed != "" {
 		env = append(env, "CI_DEPENDENCY_SEED="+f.seed)
 	}
@@ -423,6 +427,9 @@ func run() error {
 	}
 	if f.incremental != nil {
 		defer f.incremental.root.Close()
+	}
+	if err = f.openGitObjectCache(ctx, os.Getenv("GIT_OBJECT_CACHE_MODE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL"), os.Getenv("GIT_OBJECT_CACHE_REFS")); err != nil {
+		return err
 	}
 	f.changes = make(chan struct{}, 1)
 	f.demandSource = scaleSetDemand(c, os.Getenv("SCALE_SET_NAME"), func() int { _, id := f.api(); return id })
