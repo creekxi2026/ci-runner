@@ -287,6 +287,9 @@ class GitCache:
             try:
                 self.git(workspace, "init", "--template=")
                 private = workspace / ".git"
+                # --template= omits info/. actions/checkout writes its non-cone
+                # sparse-checkout file here directly, before invoking Git.
+                (private / "info").mkdir(mode=0o700)
                 shutil.rmtree(private / "objects")
                 self.copy_objects(old[0] / "objects", private / "objects", self.uid)
                 for ref, sha in self.heads(old[0]).items():
