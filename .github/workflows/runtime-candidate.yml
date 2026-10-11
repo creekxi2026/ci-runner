@@ -83,9 +83,11 @@ jobs:
       - name: Verify native Go cache reuse and source invalidation offline
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$RUNNER_TEMP/native-cache-test"
+          # Go executes its generated test binary under TMPDIR; Docker tmpfs
+          # defaults to noexec. This applies only to the isolated test container.
           docker run --rm --network none --read-only --user 0 \
             --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
-            --security-opt no-new-privileges --tmpfs /tmp:rw,size=768m \
+            --security-opt no-new-privileges --tmpfs /tmp:rw,exec,nosuid,nodev,size=768m \
             --mount "type=bind,src=$RUNNER_TEMP/native-cache-test,dst=/test,readonly" \
             -e HOME=/tmp -e TMPDIR=/tmp -e CI_NATIVE_CACHE_TEST=1 \
             --entrypoint /test runtime-candidate:review \
