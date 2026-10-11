@@ -99,6 +99,22 @@ class GitCacheTest(unittest.TestCase):
         self.assertFalse((a / ".git/objects/info/alternates").exists())
         self.assertEqual(len([p for p in self.cache_root.iterdir() if cache_module.SNAPSHOT.fullmatch(p.name)]), 1)
 
+    def test_non_cone_sparse_checkout_then_full_checkout(self):
+        (self.remote / "excluded").mkdir()
+        (self.remote / "excluded/large-file").write_text("not selected")
+        second = self.commit("sparse target")
+        workspace, _ = self.prepare("sparse-job")
+        # Pinned actions/checkout writes this file directly; git init with an
+        # empty template does not normally create its parent directory.
+        self.run_git(workspace, "config", "core.sparseCheckout", "true")
+        (workspace / ".git/info/sparse-checkout").write_text("/value\n")
+        self.run_git(workspace, "checkout", "--force", "--detach", second)
+        self.assertEqual(self.run_git(workspace, "rev-parse", "HEAD"), second)
+        self.assertEqual((workspace / "value").read_text(), "sparse target")
+        self.assertFalse((workspace / "excluded/large-file").exists())
+        self.run_git(workspace, "sparse-checkout", "disable")
+        self.assertEqual((workspace / "excluded/large-file").read_text(), "not selected")
+
     def test_parallel_distinct_branches_keep_independent_heads(self):
         self.run_git(self.remote, "checkout", "-b", "feature")
         feature = self.commit("feature")
