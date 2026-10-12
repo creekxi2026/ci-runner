@@ -461,3 +461,11 @@ dependency) and proves native transforms are reused while tests still execute,
 then invalidates a changed source file. Run it with
 `CI_NATIVE_CACHE_TEST=1 go test -run '^TestIncrementalNativeGoRuntime$' -v` in an
 isolated fixture directory. Local/static evidence is not live fleet acceptance.
+
+## Optional cleanup diagnostics
+
+The opt-in controller `JOB_CLEANUP_JOURNAL=on` preserves whitelisted cleanup
+observations outside private job data. It is disabled by default and is not a
+service-specific terminal receipt. See [interface and limitations](docs/cleanup-observations.md)
+before using it; the PG terminal provider and production retention enforcement
+are still missing.

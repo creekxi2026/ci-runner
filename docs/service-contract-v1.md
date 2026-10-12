@@ -1,5 +1,10 @@
 # Generic job services v1
 
+The optional [controller cleanup journal](cleanup-observations.md) retains
+infrastructure observations after job deletion. It does not extend this adapter
+ABI with teardown or implement a project terminal receipt. Missing project
+verification must remain unknown; resource disappearance is insufficient.
+
 This is the implemented runner-side service v1 contract. Consuming projects own
 their adapters and workflows; operators coordinate upgrades for each deployment.
 The previous parameterized database API has been removed from the core.
