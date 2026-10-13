@@ -144,7 +144,12 @@ func TestServiceTerminalRuntime(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if e = f.createContext(ctx, n, image, "1001", []string{"sleep", "240"}, nil, h, n+"-net"); e != nil {
+			exitCode := 0
+			if outcome == "failed" || outcome == "unavailable" {
+				exitCode = 7
+			}
+			workerCommand := []string{"/bin/sh", "-c", fmt.Sprintf("while [ ! -e /tmp/terminal-exit ]; do sleep .1; done; exit %d", exitCode)}
+			if e = f.createContext(ctx, n, image, "1001", workerCommand, nil, h, n+"-net"); e != nil {
 				t.Fatal(e)
 			}
 			event := scaleset.JobMessageBase{OwnerName: parts[0], RepositoryName: parts[1], WorkflowRunID: native.RunID, JobID: outcome}
@@ -183,6 +188,21 @@ func TestServiceTerminalRuntime(t *testing.T) {
 					t.Fatal("fixture session holder unavailable")
 				}
 				time.Sleep(50 * time.Millisecond)
+			}
+
+			if outcome == "canceled" {
+				exitCode = 137
+				if e = docker("POST", "/containers/"+n+"/kill", nil, nil); e != nil {
+					t.Fatal(e)
+				}
+			} else {
+				if code, e := execCode(ctx, n, "1001", []string{"touch", "/tmp/terminal-exit"}); e != nil || code != 0 {
+					t.Fatal("worker exit trigger")
+				}
+			}
+			var exited struct{ StatusCode int }
+			if e = docker("POST", "/containers/"+n+"/wait?condition=not-running", nil, &exited); e != nil || exited.StatusCode != exitCode {
+				t.Fatal("worker outcome mismatch")
 			}
 
 			if outcome == "failed" {
@@ -270,7 +290,7 @@ func TestServiceTerminalRuntime(t *testing.T) {
 				t.Fatal("job disk remains")
 			}
 			hook(t, "collect", n, outcome)
-			t.Log(fmt.Sprintf("outcome=%s real-resource-cleanup=true scheduler=fixture private-disk=absent", outcome))
+			t.Log(fmt.Sprintf("outcome=%s worker-exit=%d real-resource-cleanup=true scheduler=fixture private-disk=absent", outcome, exitCode))
 		})
 	}
 }
