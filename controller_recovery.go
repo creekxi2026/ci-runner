@@ -33,6 +33,7 @@ type jobState struct {
 	diagnosticsCaptured          bool
 	cacheEvent                   *scaleset.JobStarted
 	cacheAttempted               bool
+	cleanupFinalizing            bool   // resources removed; release and evidence commits may need retry
 	idleExec                     string // retained across ambiguous start/inspect responses
 }
 type messageProgress struct {
@@ -86,7 +87,16 @@ func (f *fleet) api() (runnerAPI, int) { f.mu.Lock(); defer f.mu.Unlock(); retur
 // Caller holds only this job's mutex. Keep the runner and companions together
 // if removing the runner fails; never tear its services out from under it.
 func (f *fleet) cleanJob(n, network string, j *jobState) {
+	if j.cleanupFinalizing {
+		if f.finalizeCleanup(n) == nil {
+			f.forgetCleanedJob(n)
+		}
+		return
+	}
 	f.cancelServices(j)
+	if err := f.beginCleanupObservation(n); err != nil {
+		return
+	}
 	resources := []string{n, n + "-fw", n + "-pg", n + "-proxy"}
 	if j.recovered {
 		resources = j.resources
@@ -137,16 +147,37 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 			return
 		}
 	}
-	if f.work != nil {
-		if err := f.work.release(n); err != nil {
-			return
-		}
+	j.cleanupFinalizing = true
+	if err := f.finalizeCleanup(n); err != nil {
+		return
 	}
+	f.forgetCleanedJob(n)
+}
+
+func (f *fleet) forgetCleanedJob(n string) {
 	f.mu.Lock()
 	delete(f.jobs, n)
 	delete(f.states, n)
 	f.mu.Unlock()
 	f.changed()
+}
+
+func (f *fleet) finalizeCleanup(n string) error {
+	if f.work != nil {
+		_, err := f.work.root.Lstat(f.work.leaseDir + "/" + n)
+		if errors.Is(err, os.ErrNotExist) {
+			// A previous release may have unlinked the lease but failed its
+			// directory sync. Absence alone does not finish that transaction.
+			if err = syncCleanupDirectory(f.work.root, f.work.leaseDir); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if err = f.work.release(n); err != nil {
+			return err
+		}
+	}
+	return f.finishCleanupObservation(n)
 }
 
 type containerState struct {

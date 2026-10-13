@@ -73,6 +73,7 @@ type fleet struct {
 	proxyEnv             []string
 	allowedEvents        map[string]bool
 	services             *serviceManager
+	cleanupLog           *cleanupJournal
 	cache                *dependencyCache
 	incremental          *incrementalCache
 	gitCache             *gitObjectCache
@@ -297,11 +298,19 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	// JobStarted is scheduler assignment, not proof that an offline listener
 	// has run user code. Only the atomic job-start hook arbitrates idle cleanup.
 	for _, event := range msg.JobStartedMessages {
+		if event != nil {
+			if err := f.observeScheduler(event.RunnerName, event.RunnerID, event.JobMessageBase, ""); err != nil {
+				return err
+			}
+		}
 		f.cacheJobEvent(event)
 	}
 	for _, event := range msg.JobCompletedMessages {
 		if event == nil {
 			continue
+		}
+		if err := f.observeScheduler(event.RunnerName, event.RunnerID, event.JobMessageBase, event.Result); err != nil {
+			return err
 		}
 		f.cacheJobEvent(&scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase})
 		if n, ok := f.snapshot()[event.RunnerName]; ok {
@@ -422,6 +431,16 @@ func run() error {
 	if err = f.verifyWorkMount(ctx); err != nil {
 		return err
 	}
+	if mode := os.Getenv("JOB_CLEANUP_JOURNAL"); mode != "" && mode != "off" {
+		if mode != "on" {
+			return fmt.Errorf("JOB_CLEANUP_JOURNAL must be on or off")
+		}
+		f.cleanupLog, err = openCleanupJournal(f.work, 0)
+		if err != nil {
+			return err
+		}
+		defer f.cleanupLog.root.Close()
+	}
 	if err = f.openIncrementalCache(ctx, os.Getenv("INCREMENTAL_CACHE_POLICY_FILE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL")); err != nil {
 		return err
 	}
@@ -435,6 +454,9 @@ func run() error {
 	f.demandSource = scaleSetDemand(c, os.Getenv("SCALE_SET_NAME"), func() int { _, id := f.api(); return id })
 	// Recovery and the local janitor start before registration/session acquisition.
 	if err = f.recover(); err != nil {
+		return err
+	}
+	if err = f.recoverCleanupObservations(); err != nil {
 		return err
 	}
 	localCtx, stopLocal := context.WithCancel(context.Background())

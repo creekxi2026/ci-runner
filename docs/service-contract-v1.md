@@ -1,5 +1,10 @@
 # Generic job services v1
 
+The optional [controller cleanup journal](cleanup-observations.md) retains
+infrastructure observations after job deletion. It does not extend this adapter
+ABI with teardown or implement a project terminal receipt. Missing project
+verification must remain unknown; resource disappearance is insufficient.
+
 This is the implemented runner-side service v1 contract. Consuming projects own
 their adapters and workflows; operators coordinate upgrades for each deployment.
 The previous parameterized database API has been removed from the core.
@@ -284,3 +289,16 @@ overhead; ordinary hashed filenames do not consume a worst-case escaping budget.
 See the README native incremental cache contract for bounds, private copies,
 compatibility, rollback and fixed-volume ownership. Consumer-specific compiler or
 transform paths belong in the operator policy, never this generic core.
+
+## Optional host admission and teardown
+
+A service may declare `teardown: {"checks": ["resource-absent"], "admission": true}`.
+It requires `JOB_CLEANUP_JOURNAL=on`; the declaration is fingerprinted and the
+original spec persists before provisioning. Admission binds an operator-issued
+per-lease payload before service creation. Cleanup runs the pinned adapter after
+worker absence, with init secrets RO and separate `/terminal` outputs, then
+persists only the exact allowlisted boolean checks before deleting private data.
+Missing proof stays unknown while ordinary resource reclamation continues.
+See [terminal evidence](cleanup-observations.md) for the envelope, ordering,
+bounds, persistence, compatibility and retention contract. Old controllers
+reject this optional catalog field; old catalogs require no changes.
