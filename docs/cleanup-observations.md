@@ -71,9 +71,13 @@ The only accepted output is `/terminal/proof.json`:
 The map must contain exactly the declared keys, all booleans true. No free text,
 errors, credentials, endpoint, SQL or arbitrary payload is copied. The controller
 adds the pinned adapter/config identities and fsyncs `service_proofs[service]`
-before destroying the service or private job data. Missing, failed, expired,
-malformed or unreachable verification produces **no proof**, while ordinary
-owned resource reclamation continues. An init failure may also be unprovable;
+before destroying the service or private job data. A temporary server inspection
+error, adapter setup I/O error or incomplete adapter run retains the owned service,
+secrets and checkpoint for retry within the original deadline. Restart never
+extends that deadline. Once it expires, ordinary owned resource reclamation can
+continue without proof; a previously completed successful witness can still be
+transferred. Confirmed missing/stopped servers and malformed verification also
+produce **no proof**. An init failure may also be unprovable;
 this must remain unknown rather than be translated into project success.
 
 ## Order and recovery

@@ -95,7 +95,18 @@ func (f *fleet) collectServiceTeardown(index *serviceIndex, id string) error {
 		}
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		defer cancel()
-		if f.verifyServiceContainer(ctx, index, id, "server", spec.Image, true) != nil {
+		var server serviceContainer
+		e = dockerContext(ctx, "GET", "/containers/"+serviceName(index.Job, id, "server")+"/json", nil, &server)
+		if errors.Is(e, errMissing) {
+			return nil
+		}
+		if e != nil {
+			return e // Unknown availability must retain the source for bounded retry.
+		}
+		if !serviceMatches(server.Config.Labels, index, id, "server") || server.Config.Image != spec.Image {
+			return fmt.Errorf("teardown server identity mismatch")
+		}
+		if !server.State.Running {
 			return nil
 		}
 		if e = f.runServiceAdapter(ctx, index, id, spec, r.Endpoint, "teardown"); e != nil {
@@ -104,7 +115,9 @@ func (f *fleet) collectServiceTeardown(index *serviceIndex, id string) error {
 				return inspectError
 			}
 			if !success {
-				return nil
+				// Failed setup/observation and partial adapter failure are retryable
+				// only inside the original persisted execution bound. Keep inputs.
+				return e
 			}
 		}
 	}

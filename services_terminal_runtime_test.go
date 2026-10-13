@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,21 @@ import (
 type terminalTestTransport struct {
 	base   http.RoundTripper
 	prefix string
+}
+
+type terminalInspectFault struct {
+	base  http.RoundTripper
+	path  string
+	fired atomic.Bool
+	skip  int32
+	seen  atomic.Int32
+}
+
+func (r *terminalInspectFault) RoundTrip(q *http.Request) (*http.Response, error) {
+	if q.Method == "GET" && q.URL.Path == r.path && r.seen.Add(1) > r.skip && r.fired.CompareAndSwap(false, true) {
+		return &http.Response{StatusCode: 503, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"message":"temporary inspect failure"}`)), Request: q}, nil
+	}
+	return r.base.RoundTrip(q)
 }
 
 func (r terminalTestTransport) RoundTrip(q *http.Request) (*http.Response, error) {
@@ -273,6 +289,52 @@ func TestServiceTerminalRuntime(t *testing.T) {
 			}
 			if e = f.observeScheduler(n, 106, event, nativeOutcome); e != nil {
 				t.Fatal(e)
+			}
+			if outcome == "canceled" {
+				// A transient server observation must leave the real service and
+				// private inputs intact, then recover with the original time bound.
+				client := engine
+				fault := &terminalInspectFault{base: client.Transport, path: "/v1.47/containers/" + serviceName(n, id, "server") + "/json"}
+				engine = &http.Client{Transport: fault, Timeout: client.Timeout}
+				f.cleanup(n, n+"-net")
+				engine = client
+				if !fault.fired.Load() || f.state(n) == nil {
+					t.Fatal("transient server observation did not retain pending cleanup")
+				}
+				if e = f.verifyServiceContainer(ctx, index, id, "server", catalog.Services[id].Image, true); e != nil {
+					t.Fatal("proof source was lost after transient inspect", e)
+				}
+				if _, e = w.root.Lstat(serviceDir(n, id) + "/secrets-init"); e != nil {
+					t.Fatal("private recovery inputs were lost", e)
+				}
+				before, readError := f.cleanupLog.read(n)
+				if readError != nil || len(before.Proofs) != 0 {
+					t.Fatal("unexpected proof before recovery", readError)
+				}
+				recovered, openError := openCleanupJournal(w, 0)
+				if openError != nil {
+					t.Fatal(openError)
+				}
+				defer func() { f.cleanupLog = journal; recovered.root.Close() }()
+				f.cleanupLog = recovered
+				after, readError := recovered.read(n)
+				if readError != nil || after.StartedAt != before.StartedAt {
+					t.Fatal("restart extended the teardown deadline", readError)
+				}
+				t.Log("server inspect 503 retained real service and private inputs; restarted with original deadline")
+				// An error while preparing the adapter has the same retention rule.
+				// First inspect proves no completed witness; the second is setup.
+				fault = &terminalInspectFault{base: client.Transport, path: "/v1.47/containers/" + serviceName(n, id, "teardown") + "/json", skip: 1}
+				engine = &http.Client{Transport: fault, Timeout: client.Timeout}
+				f.cleanup(n, n+"-net")
+				engine = client
+				if !fault.fired.Load() || f.state(n) == nil {
+					t.Fatal("adapter setup uncertainty discarded recovery inputs")
+				}
+				if e = f.verifyServiceContainer(ctx, index, id, "server", catalog.Services[id].Image, true); e != nil {
+					t.Fatal("adapter setup error lost proof source", e)
+				}
+				t.Log("teardown setup inspect 503 retained the service for the next bounded retry")
 			}
 			f.cleanup(n, n+"-net")
 			if f.state(n) != nil {
