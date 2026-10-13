@@ -72,6 +72,14 @@ func (f *fleet) provisionService(parent context.Context, n, id string, created t
 		return
 	}
 	spec := f.services.Catalog.Services[id]
+	if spec.Teardown != nil && spec.Teardown.Admission {
+		if e := f.admitService(index, id); e != nil {
+			if !errors.Is(e, os.ErrNotExist) {
+				f.serviceFailure(parent, n, id)
+			}
+			return
+		}
+	}
 	r, e := f.readServiceRecord(n, id)
 	if errors.Is(e, os.ErrNotExist) {
 		_, life := f.limits()
@@ -140,8 +148,9 @@ func serviceMatches(labels map[string]string, index *serviceIndex, id, role stri
 
 type serviceContainer struct {
 	State struct {
-		Running bool
-		Status  string
+		Running  bool
+		Status   string
+		ExitCode *int
 	}
 	Config struct {
 		Image  string
@@ -326,8 +335,8 @@ func (f *fleet) runServiceAdapter(ctx context.Context, index *serviceIndex, id s
 		return e
 	}
 	secretPaths := map[string]string{}
-	mounts := []obj{f.serviceVolumeMount(serviceDir(n, id)+"/"+phase, "/run/ci-adapter", true), f.serviceVolumeMount(serviceDir(n, id)+"/outputs", "/outputs", phase == "check")}
-	if phase == "init" {
+	mounts := []obj{f.serviceVolumeMount(serviceDir(n, id)+"/"+phase, "/run/ci-adapter", true), f.serviceVolumeMount(serviceDir(n, id)+"/outputs", "/outputs", phase != "init")}
+	if phase == "init" || phase == "teardown" {
 		mounts = append(mounts, f.serviceVolumeMount(serviceDir(n, id)+"/secrets-init", "/run/ci-service-secrets", true))
 		for secret, recipients := range spec.Secrets {
 			for _, recipient := range recipients {
@@ -336,6 +345,9 @@ func (f *fleet) runServiceAdapter(ctx context.Context, index *serviceIndex, id s
 				}
 			}
 		}
+	}
+	if phase == "teardown" {
+		mounts = append(mounts, f.serviceVolumeMount(serviceDir(n, id)+"/terminal", "/terminal", false))
 	}
 	request := obj{"version": 1, "lease_id": index.Lease, "owner_id": index.Owner, "job_id": n, "service_id": id, "endpoint": endpoint, "config": spec.Config, "secret_files": secretPaths}
 	if e := f.serviceWriteJSON(serviceDir(n, id)+"/"+phase+"/request.json", request, 0444); e != nil {
@@ -349,6 +361,9 @@ func (f *fleet) runServiceAdapter(ctx context.Context, index *serviceIndex, id s
 	if e := f.serviceWait(ctx, serviceName(n, id, phase)); e != nil {
 		return e
 	}
+	if phase == "teardown" {
+		return nil
+	} // Retain verified exit state until proof is durable.
 	return f.removeServiceContainer(ctx, index, id, phase)
 }
 func (f *fleet) removeServiceContainer(ctx context.Context, index *serviceIndex, id, role string) error {
@@ -369,7 +384,7 @@ func (f *fleet) removeServiceContainer(ctx context.Context, index *serviceIndex,
 func (f *fleet) removeOneService(index *serviceIndex, id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	for _, role := range []string{"init", "check", "guard", "allow", "server", "ns"} {
+	for _, role := range []string{"init", "check", "teardown", "guard", "allow", "server", "ns"} {
 		if e := f.removeServiceContainer(ctx, index, id, role); e != nil {
 			return e
 		}
@@ -425,6 +440,9 @@ func (f *fleet) removeServices(n string) error {
 	for id := range index.Services {
 		if !serviceID.MatchString(id) {
 			return fmt.Errorf("invalid service cleanup ID")
+		}
+		if e = f.collectServiceTeardown(&index, id); e != nil {
+			return e
 		}
 		if e = f.removeOneService(&index, id); e != nil {
 			return e

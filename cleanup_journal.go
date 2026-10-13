@@ -35,14 +35,16 @@ type cleanupRunner struct {
 	FinishedAt string `json:"finished_at"`
 }
 type cleanupObservation struct {
-	Schema     string         `json:"schema"`
-	Owner      string         `json:"owner_id"`
-	Job        string         `json:"runner_name"`
-	Native     *cleanupNative `json:"native"`
-	Services   *serviceIndex  `json:"service_index"`
-	Runner     cleanupRunner  `json:"runner_before_cleanup"`
-	StartedAt  string         `json:"cleanup_started_at"`
-	ReleasedAt string         `json:"allocation_released_at"`
+	Admissions map[string]string               `json:"admission_digests,omitempty"`
+	Proofs     map[string]serviceTerminalProof `json:"service_proofs,omitempty"`
+	Schema     string                          `json:"schema"`
+	Owner      string                          `json:"owner_id"`
+	Job        string                          `json:"runner_name"`
+	Native     *cleanupNative                  `json:"native"`
+	Services   *serviceIndex                   `json:"service_index"`
+	Runner     cleanupRunner                   `json:"runner_before_cleanup"`
+	StartedAt  string                          `json:"cleanup_started_at"`
+	ReleasedAt string                          `json:"allocation_released_at"`
 }
 type cleanupJournal struct {
 	root    *os.Root

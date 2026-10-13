@@ -289,3 +289,16 @@ overhead; ordinary hashed filenames do not consume a worst-case escaping budget.
 See the README native incremental cache contract for bounds, private copies,
 compatibility, rollback and fixed-volume ownership. Consumer-specific compiler or
 transform paths belong in the operator policy, never this generic core.
+
+## Optional host admission and teardown
+
+A service may declare `teardown: {"checks": ["resource-absent"], "admission": true}`.
+It requires `JOB_CLEANUP_JOURNAL=on`; the declaration is fingerprinted and the
+original spec persists before provisioning. Admission binds an operator-issued
+per-lease payload before service creation. Cleanup runs the pinned adapter after
+worker absence, with init secrets RO and separate `/terminal` outputs, then
+persists only the exact allowlisted boolean checks before deleting private data.
+Missing proof stays unknown while ordinary resource reclamation continues.
+See [terminal evidence](cleanup-observations.md) for the envelope, ordering,
+bounds, persistence, compatibility and retention contract. Old controllers
+reject this optional catalog field; old catalogs require no changes.

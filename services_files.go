@@ -154,6 +154,9 @@ func (f *fleet) prepareServices(n string, h obj) (*serviceIndex, error) {
 	}
 	index.Lease = hex.EncodeToString(random[:])
 	for id, s := range f.services.Catalog.Services {
+		if s.Teardown != nil && f.cleanupLog == nil {
+			return nil, fmt.Errorf("teardown requires durable cleanup journal")
+		}
 		index.Services[id] = serviceIndexItem{s.Image, s.Adapter, serviceDigest(s.Config), serviceMount + "/services/" + id + "/ready.json"}
 		for _, p := range []string{servicePublic(n) + "/services/" + id, servicePublic(n) + "/services/" + id + "/outputs"} {
 			if e := f.serviceMkdir(p, 0755); e != nil {
@@ -163,10 +166,13 @@ func (f *fleet) prepareServices(n string, h obj) (*serviceIndex, error) {
 		if e := f.serviceMkdir(serviceDir(n, id), 0700); e != nil {
 			return nil, e
 		}
-		for _, p := range []string{"secrets-init", "secrets-service", "init", "check", "outputs"} {
+		for _, p := range []string{"secrets-init", "secrets-service", "init", "check", "teardown", "terminal", "outputs"} {
 			if e := f.serviceMkdir(serviceDir(n, id)+"/"+p, 0700); e != nil {
 				return nil, e
 			}
+		}
+		if e := f.serviceWriteJSON(serviceDir(n, id)+"/spec.json", s, 0400); e != nil {
+			return nil, e
 		}
 		for secret, recipients := range s.Secrets {
 			if _, e := rand.Read(random[:]); e != nil {
@@ -186,6 +192,11 @@ func (f *fleet) prepareServices(n string, h obj) (*serviceIndex, error) {
 	}
 	if e := f.serviceWriteJSON(servicePublic(n)+"/index.json", index, 0444); e != nil {
 		return nil, e
+	}
+	if f.cleanupLog != nil {
+		if e := f.cleanupLog.update(n, func(v *cleanupObservation) error { v.Services = index; return nil }); e != nil {
+			return nil, e
+		}
 	}
 	mounts, _ := h["Mounts"].([]obj)
 	mounts = append(mounts, f.serviceVolumeMount(servicePublic(n), serviceMount, true))

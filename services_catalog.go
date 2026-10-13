@@ -26,7 +26,12 @@ type serviceResources struct {
 	Data    int64 `json:"data_bytes"`
 	Startup int64 `json:"startup_seconds"`
 }
+type serviceTeardown struct {
+	Checks    []string `json:"checks"`
+	Admission bool     `json:"admission"`
+}
 type serviceSpec struct {
+	Teardown  *serviceTeardown    `json:"teardown,omitempty"`
 	Image     string              `json:"image"`
 	Adapter   string              `json:"adapter_image"`
 	Config    map[string]any      `json:"config"`
@@ -265,6 +270,18 @@ func validateServices(c *serviceCatalog, p servicePolicy) error {
 	for id, s := range c.Services {
 		if !serviceID.MatchString(id) || !digestReference.MatchString(s.Image) || !digestReference.MatchString(s.Adapter) || s.Config == nil || s.Env == nil || s.Secrets == nil || s.Storage == nil || len(s.Ports) == 0 || len(s.Ports) > 32 {
 			return bad()
+		}
+		if s.Teardown != nil {
+			if len(s.Teardown.Checks) == 0 || len(s.Teardown.Checks) > 16 {
+				return bad()
+			}
+			seen := map[string]bool{}
+			for _, key := range s.Teardown.Checks {
+				if !serviceID.MatchString(key) || seen[key] {
+					return bad()
+				}
+				seen[key] = true
+			}
 		}
 		r, m := s.Resources, p.MaxResources
 		for _, pair := range [][2]int64{{r.Memory, m.Memory}, {r.CPU, m.CPU}, {r.Pids, m.Pids}, {r.Data, m.Data}, {r.Startup, m.Startup}} {

@@ -1,147 +1,138 @@
-# Controller cleanup observations (partial RUIF-106)
+# Durable terminal evidence
 
-`JOB_CLEANUP_JOURNAL=on` enables a controller-only infrastructure journal. It is
-**not** a `release-pg-terminal/v1` provider and must not unblock a service-specific
-cleanup gate. The default is off. This change has not been deployed.
+`JOB_CLEANUP_JOURNAL=on` enables the host-only `ci-cleanup-observation/v1`
+journal. An optional service `teardown` declaration adds a project verifier and
+an optional host admission gate. Defaults remain off/absent. This code has not
+replaced a resident controller. The generic journal is not itself a project
+terminal receipt: a reviewed project collector interprets its boolean checks.
 
-The current adapter ABI only supports `init` and `check`. It provides neither a
-project cleanup verifier nor trusted project execution/admission records. This
-PR preserves facts that would otherwise disappear while those missing interfaces
-are resolved. It does not assert database absence, role absence, credential
-revocation, or successful tests from removal of a container or directory.
+## Storage and trust
 
-## Implemented interface
+All paths below are subdirectories of the existing fixed work volume:
 
-Records live in the existing fixed volume at
-`cleanup-v1/<deployment-owner>/<runner-name>.json`, outside `jobs/<runner-name>`.
-Directories are root-owned 0700; records are root-owned 0444, at most 65536 bytes.
-Only a trusted host collector may read them. No worker mount, worker publication
-API, arbitrary output path or worker deletion API is added. `acquire`, `ready`,
-`exec`, service catalog v1 and its fingerprint are unchanged.
-
-The closed `ci-cleanup-observation/v1` object contains:
-
-| Field | Evidence and limits |
+| Path | Owner, mode, writer |
 | --- | --- |
-| `owner_id`, `runner_name` | Controller allocation identity; runner name is **not** a native numeric job ID |
-| `native` | Optional scheduler repository, run ID, opaque scheduler job ID, runner ID and result; no inferred source SHA or attempt |
-| `service_index` | Optional controller-private index captured before deletion; absence stays null |
-| `runner_before_cleanup` | Allowlisted Docker state: observed, running, OOMKilled, exit code and validated finish timestamp |
-| `cleanup_started_at` | Durable pre-deletion checkpoint |
-| `allocation_released_at` | Only after normal cleanup/deregistration, data removal and pool release, plus fresh scoped absence checks |
+| `cleanup-v1/<owner>/<runner>.json` | root 0444, root 0700 parents; controller only |
+| `admissions-v1/<owner>/<runner>/<service>.json` | root 0444, root 0700 parents; trusted host issuer only |
+| `jobs/<runner>/service-private/<service>/spec.json` | root 0400; original reviewed spec, before provisioning |
+| `jobs/<runner>/service-private/<service>/terminal/proof.json` | root 0444; pinned teardown adapter only |
 
-`native=null` and `observed=false` mean unknown. `observed=false` makes every other
-runner-state field unusable as evidence. A scheduler result is a scheduler fact,
-not an authenticated release result. Unknown scheduler enums become `unknown`;
-cleanup cannot turn a failed/canceled result into a success. A delayed completion
-can add the result after cleanup. Conflicting identities or outcomes are rejected.
+Neither worker nor service receives journal/admission mounts. Project collectors
+receive an exact owner's journal **read-only**, never the volume root. All reads
+are no-follow, regular-file, one-link, bounded to 65536 bytes; journal/admission
+reads also enforce root ownership and exact modes. Unknown/duplicate JSON keys
+and incorrect types fail closed. Private service parents remain root 0700.
 
-Writes use exclusive temporary files, file fsync, atomic rename and directory
-fsync. Retries synchronize the directory even when bytes already match. Initial
-ancestor directories are synchronized before accepting writes. The shared-work
-owner lock excludes another controller; a journal mutex serializes local writers.
-Readers reject final symlinks, hard links, non-regular files, writable/wrong-owner
-files, duplicate JSON keys and oversized data. Temporary crash files are unlinked,
-never followed. Names are generated from validated runner IDs.
+Journal writes use exclusive temp files, file fsync, rename and directory fsync.
+The owner flock excludes other controllers; a local mutex serializes updates.
+Retries fsync even unchanged content and synchronize newly created ancestors.
+Temporary crash files are unlinked, never followed. A failed final write can be
+retried after the lease has already been removed. Startup reconciliation uses
+fresh scoped resource absence checks and never deletes arbitrary journal names.
+
+## Service extension
+
+A new controller accepts this optional member in a service v1 spec:
+
+```json
+{"teardown":{"checks":["resource-absent","credential-disabled"],"admission":true}}
+```
+
+There are 1–16 unique safe check IDs. The entire declaration participates in the
+catalog fingerprint. Old catalogs retain their previous encoding/fingerprint;
+old controllers reject this new member, so install the new controller before
+enabling it. A declared teardown requires the cleanup journal to be enabled.
+The original spec is persisted before any service starts; recovery never selects
+an adapter from a changed catalog for an old lease.
+
+If admission is required, provisioning waits for a host-issued envelope with
+exact fields `version=1`, `lease_id`, `owner_id`, `job_id` (runner name),
+`service_id`, `fingerprint`, and project-owned object `payload`. The controller
+checks the envelope against its allocation and commits its canonical SHA256 to
+`admission_digests[service]` **before** creating the service. A changed admission
+or one first seen after cleanup is rejected. The project issuer must establish
+payload provenance; root-chowning a worker result does not make it trusted.
+
+After cancellation/join of provisioning and confirmed worker absence, the
+controller invokes the original pinned `/ci-adapter teardown`. The request is
+the same v1 envelope as init. The adapter receives init's private secrets RO,
+consumer outputs RO, its request RO and a distinct `/terminal` RW directory.
+It shares only the existing private service network namespace. It has no
+capabilities, Docker API, restart policy or logs, and uses the existing 2/16
+adapter budget. Its deadline is cleanup_started_at + startup_seconds, persisted
+across retries/restarts rather than extended indefinitely.
+
+The only accepted output is `/terminal/proof.json`:
+
+```json
+{"version":1,"checks":{"resource-absent":true,"credential-disabled":true}}
+```
+
+The map must contain exactly the declared keys, all booleans true. No free text,
+errors, credentials, endpoint, SQL or arbitrary payload is copied. The controller
+adds the pinned adapter/config identities and fsyncs `service_proofs[service]`
+before destroying the service or private job data. Missing, failed, expired,
+malformed or unreachable verification produces **no proof**, while ordinary
+owned resource reclamation continues. An init failure may also be unprovable;
+this must remain unknown rather than be translated into project success.
+
+## Order and recovery
 
 ```mermaid
 sequenceDiagram
-    participant S as Scheduler
+    participant H as Trusted host issuer/collector
     participant C as Controller
-    participant J as Private journal
-    participant D as Docker / fixed work volume
-    S->>C: JobStarted / JobCompleted (trusted SDK)
-    C->>J: Persist whitelisted scheduler identity/result
-    C->>J: Persist pre-cleanup state + private service index
-    C->>D: Existing owned resource / job data cleanup
-    C->>D: Deregister runner and release pool lease
-    C->>D: Check exact job/owner containers, networks and paths absent
-    C->>J: Persist allocation_released_at
-    Note over J: Survives job directory removal; not PG terminal receipt
+    participant A as Pinned project adapter
+    participant J as Durable owner journal
+    H->>C: Persist exact allocation admission
+    C->>J: Commit admission digest before service start
+    C->>A: init / check
+    Note over C: Job completes, fails, cancels or expires
+    C->>C: Cancel/join provisioning; delete worker
+    C->>J: Persist cleanup start and allocation/native observations
+    C->>A: teardown, bounded original spec
+    A-->>C: Whitelisted boolean proof, or no proof
+    C->>J: Fsync proof before deleting its source
+    C->>C: Delete service, private data, network; deregister/release
+    C->>J: Fresh absence checks; allocation_released_at
+    H->>J: Read after worker and private disk are gone
+    H->>H: Join exact native job and project admission; publish receipt
 ```
 
-## Failure, restart and storage rules
+Pre-cleanup runner inspect may say running or unknown. Only the final absence
+checks establish that all job processes are gone. `native` is the SDK's exact
+repository/run/runner plus opaque scheduler job ID and result; it does **not**
+invent a numeric Actions job ID, source SHA or attempt. Delayed completion can
+update the durable journal after ordinary cleanup; conflicting outcomes fail.
+Project collectors must authenticate the numeric native identity separately.
 
-A failed initial journal commit postpones cleanup, keeping the allocation for
-retry. A failed final commit keeps an in-memory finalization state, so retries do
-not need the already removed lease. On restart, the ordinary controller recovery
-handles surviving allocations; pending journal entries with no remaining
-allocation are reconciled with read-only Docker and filesystem checks. Unknown
-Docker responses never establish absence. Startup refuses a journal whose pending
-allocation cannot be reconciled. Operators must investigate rather than delete
-its journal to force successful evidence.
+## Retention and rollback
 
-Journal storage is diagnostic retention, not a cache. No worker can read a sibling
-record or remove one. Do not mount the owner directory into a candidate job.
-For an authorized collector, use a root-run container with only the exact owner
-subpath mounted read-only; never the fixed-volume root. The existing PG consumer
-requires a different, per-service publication root with 0755 directories and
-`<lease_id>.json`; this journal is intentionally incompatible with that interface.
+Retain incomplete journals/admissions until investigation resolves them. Keep
+completed journal, admission, exported receipt and verified consumer result for
+30 days and archive their hashes together. Reclamation is an operator operation:
+check exact owner/lease/native attempt, archive digest and successful consumer
+record, verify no active runner/lease/consumer mount refers to it, then remove
+only those exact regular files and empty per-job/per-lease directories. Do not
+prune shared caches, fixed volumes or another owner's records. There is no
+automatic destructive retention API. Bound the initial pilot to 1000 records /
+64 MiB and stop new pilot dispatch for archival review before that bound; the
+host sweep refuses >1000 journals and existing cleanup must remain enabled.
 
-Retention policy for an eventual approved pilot: retain unresolved records until
-resolution; export completed records to the controlled evidence archive and keep
-them locally for 30 days. Prune only released records after checking the export
-digest, absence of that runner's active lease/resources, exact owner, regular file
-and age. Stop scheduling new pilot jobs when journal storage reaches 64 MiB or
-1000 records, then archive/review; existing cleanup must continue. Automatic
-retention/admission enforcement is **not implemented** in this partial PR, so a
-long-running production enablement is not ready. No fixed volumes, active leases,
-shared caches or other owners' directories may be pruned.
+Drain before changing controller or catalog; do not kill resident jobs for an
+upgrade. Rollback disables new terminal admissions, lets owned cleanup finish,
+and restores the retained old image/catalog after drain. Keep new journals and
+admissions for the matching collector. Old readers do not understand the new
+optional proof/admission fields; do not silently discard them to downgrade.
 
-## Missing project provider contract
+## Evidence boundary
 
-The pinned consumer is closet-ai
-`6f6260153a22fcf140c9fdab52b2d1b7b6975899`,
-`scripts/ci/release/lease_cleanup.py`. Its binding requires exactly repository,
-source_sha, run_id/run_attempt/job_id, lease_id/owner_id/service_id/fingerprint,
-instance_id/input_digest, producer source/workflow/policy/executor/run identity,
-and terminal_outcome. The current scheduler record does not provide the complete
-binding. Its opaque job UUID must not be substituted for the Actions job number.
-
-Before a complete provider can be implemented, the project-owned integration
-needs an authoritative admission/execution record, not a candidate manifest or
-the latest attempt returned after a restart. A protected collector must join
-the scheduler assignment to the exact authenticated Actions job/attempt/source
-and the fixed trusted planner/executor identity. Missing or conflicting joins
-must remain waiting. This is a W05 provider dependency, not a reason to defer the
-contract to W07 or weaken T06.
-
-The project also needs a digest-pinned teardown/verifier adapter. Before service
-destruction it must disable login, revoke credentials, terminate existing sessions,
-drop the two owned databases and role, and independently check catalog absence
-and rejected authentication using the previous synthetic credential. Unknown,
-partially initialized, unreachable or unexpectedly owned objects must not produce
-affirmative claims. SQL/naming and release schema serialization belong to that
-project adapter, not this generic repository. Both the selected adapter spec and
-its admission record must be persisted before provisioning so recovery cannot
-run a changed catalog/provider on an old lease.
-
-Only after both project verification and infrastructure release may a trusted
-provider render `release-pg-terminal/v1`, preserving the original test outcome,
-with a fresh `finished_at`. Store pending verification separately from private
-job data; publish atomically to a per-service read-only directory. The existing
-single lease can cover several services, so sharing a `<lease>.json` root across
-services would overwrite identities. A host collector must consume the receipt
-after runner exit/cancellation, without depending on a dead runner.
-
-## Validation and rollout boundary
-
-Unit tests cover changed/late identity, failure preservation, concurrency,
-links/modes/owners/size, partial/unknown resource state, crash-file replacement,
-restart reconciliation, finalization after lease deletion and fsync retries.
-The isolated ARM64 runtime test exercises actual success (exit 0), failure
-(exit 7) and forced cancellation (exit 137) of a non-business dummy worker,
-actual network/private directory/pool cleanup, and retained root-owned evidence.
-Scheduler IDs/results in that runtime test are explicitly synthetic. It has no
-PostgreSQL database or application credential. The fixed consumer rejects these
-generic records; missing PG receipt stays waiting.
-
-This partial PR is not a deployable solution to W05-T06. A concrete activation
-plan must first pin the finished controller, project provider/adapter, admission
-collector, full schema/config and immutable image digests, then obtain the
-existing deployment authorization. Drain current jobs without restarting them;
-retain the current controller image/config and fixed work volume; canary one
-success/failure/cancelled job, verify actual SQL/session/credential observations
-and post-run collector reads, then extend. If evidence fails, stop new admission,
-allow owned cleanup, revert the exact retained controller/config after drain and
-preserve pending journal records. Never use rollback to claim missing evidence.
+Core unit/race tests cover identity, serialization, concurrent writes, filesystem
+safety, absent/unknown resources and fsync/restart paths. The optional generic
+`TestServiceTerminalRuntime` accepts an external project fixture and uses real
+Docker operations without embedding project SQL. Its test-only HTTP transport
+prefixes volume subpaths below an owned directory of the existing fixed volume.
+Local image IDs bypass registry admission only in that test. Native SDK/API data
+in this fixture are explicitly synthetic. The project fixture verifies real PG
+cleanup and its unchanged fixed final consumer in a separate UID1001 RO mount.
+Native trusted workflow execution and fleet rollout require separate acceptance.
