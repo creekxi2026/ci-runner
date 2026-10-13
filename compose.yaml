@@ -13,6 +13,7 @@ services:
     cpus: 0.5
     pids_limit: 128
     environment:
+      JOB_INPUT_POLICY_FILE: ${JOB_INPUT_POLICY_FILE:-}
       GITHUB_CONFIG_URL: ${GITHUB_CONFIG_URL:?Set repository URL}
       SCALE_SET_NAME: ${SCALE_SET_NAME:-ci-mac-arm64-smoke}
       RUNNER_IMAGE: ${RUNNER_IMAGE:?Set digest-pinned RUNNER_IMAGE from the same deployment artifact}

@@ -29,6 +29,9 @@ cat > /tmp/ci-job-started.sh <<'HOOK'
 #!/bin/sh
 set -eu
 mkdir /tmp/ci-job-claimed
+if [ "${CI_JOB_INPUTS:-}" = 1 ]; then
+ python3 /opt/ci/job-input-gate.py
+fi
 HOOK
 chmod 700 /tmp/ci-job-started.sh
 export ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/ci-job-started.sh

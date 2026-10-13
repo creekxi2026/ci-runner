@@ -50,10 +50,13 @@ func (f *fleet) changed() {
 
 // Scheduling can block on GitHub/Docker; never run it in the local janitor.
 func (f *fleet) coordinate(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for ctx.Err() == nil {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
 		case <-f.changes:
 			if f.demandSource != nil && f.scaleMu.TryLock() {
 				err := f.reconcileCurrent(ctx)
@@ -64,6 +67,9 @@ func (f *fleet) coordinate(ctx context.Context, interval time.Duration) {
 			} else if ctx.Err() == nil {
 				f.changed()
 			}
+		}
+		if f.inputs != nil {
+			f.inputs.reconcile(ctx)
 		}
 		if !pause(ctx, interval) {
 			return
