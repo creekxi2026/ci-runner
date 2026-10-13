@@ -69,7 +69,7 @@ func (f *fleet) coordinate(ctx context.Context, interval time.Duration) {
 			}
 		}
 		if f.inputs != nil {
-			f.inputs.reconcile(ctx)
+			f.inputs.reconcile(ctx, f.snapshot())
 		}
 		if !pause(ctx, interval) {
 			return

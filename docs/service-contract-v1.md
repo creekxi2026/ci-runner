@@ -330,9 +330,11 @@ The binding schema is `ci-job-input-ready/v1` with repository, run_id, attempt a
 positive numeric job_id. Candidates cannot create bindings or replace the hook
 before the first step. No owner/private spec/token/journal mount enters workers.
 
-The coordinator alternates durable admission/receipt cursors and executes one
+The coordinator alternates durable active-runner/receipt cursors and executes one
 scope with a 60s process-group deadline per turn. It advances before invocation;
-75 rotates/retries, 0/2 settles. Reopen resumes both cursors. New admission stops
+75 rotates/retries, 0/2 settles. The active lane uses the controller’s current
+runner set, including gates already released into an in-job wait; stale backlog
+cannot consume those live jobs’ wait window. Reopen resumes both cursors. New admission stops
 above 1000 retained scope records; existing scopes continue below the 10000-entry
 inventory ceiling. Orphans/settled records remain diagnostic evidence pending
 operator retention review, never deletion authority. Controller disk/proxy/service/

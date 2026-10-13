@@ -113,6 +113,18 @@ func TestInputSealingAssignmentAndRestartFairness(t *testing.T) {
 		t.Fatal("new admission exceeded cap")
 	}
 	b.reconcile(context.Background()) // Existing scopes still progress beyond cap.
+	// A live gate remains prioritized AFTER its initial input was released.
+	if e := b.write("ci-job-b/gate/ready.json", obj{"fixture": true}, true); e != nil {
+		t.Fatal(e)
+	}
+	if e := b.write("priority.json", true, false); e != nil {
+		t.Fatal(e)
+	}
+	b.reconcile(context.Background(), map[string]string{"ci-job-b": "private-network"})
+	got, _ := b.root.ReadFile("admission-cursor.json")
+	if string(got) != `"ci-job-b"` {
+		t.Fatalf("live waiting gate starved: %s", got)
+	}
 	if _, e := b.root.Stat("ci-job-a/assignment.json"); e != nil {
 		t.Fatal("existing scope removed")
 	}

@@ -247,7 +247,7 @@ func (f *fleet) assignJobInputs(event *scaleset.JobStarted) error {
 	}
 	return b.write(event.RunnerName+"/assignment.json", obj{"schema": "ci-job-assignment/v1", "runner_name": event.RunnerName, "runner_id": event.RunnerID, "repository": event.OwnerName + "/" + event.RepositoryName, "run_id": event.WorkflowRunID, "scheduler_job_id": event.JobID, "event": event.EventName}, true)
 }
-func (b *jobInputs) reconcile(ctx context.Context) {
+func (b *jobInputs) reconcile(ctx context.Context, active ...map[string]string) {
 	// One 60s operation per turn; cursor commits BEFORE the attempt, so crashes,
 	// waiting and poisoned scopes cannot monopolize all following scopes.
 	entries, e := b.entries()
@@ -285,12 +285,21 @@ func (b *jobInputs) reconcile(ctx context.Context) {
 				continue
 			}
 			if priority {
-				if _, e := b.root.Stat(n + "/gate/ready.json"); e == nil {
-					continue
-				}
-				st, e := b.root.Stat(n + "/assignment.json")
-				if e != nil || time.Since(st.ModTime()) > 15*time.Minute {
-					continue
+				if len(active) > 0 {
+					// All live runners get priority, including a required gate
+					// already waiting for PG; old receipt backlog must not
+					// consume its finite native wait window.
+					if _, ok := active[0][n]; !ok {
+						continue
+					}
+				} else {
+					if _, e := b.root.Stat(n + "/gate/ready.json"); e == nil {
+						continue
+					}
+					st, e := b.root.Stat(n + "/assignment.json")
+					if e != nil || time.Since(st.ModTime()) > 15*time.Minute {
+						continue
+					}
 				}
 			}
 			if _, e := b.root.Stat(n + "/settled.json"); e == nil {
