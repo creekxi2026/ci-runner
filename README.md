@@ -469,3 +469,21 @@ observations outside private job data. It is disabled by default and is not a
 service-specific terminal receipt. See [interface and limitations](docs/cleanup-observations.md)
 before enabling the optional admission/teardown extension. Projects own their
 terminal schema and host collector; ordinary worker APIs remain unchanged.
+
+
+## Optional trusted project inputs
+
+`JOB_INPUT_POLICY_FILE` enables the generic `ci-job-inputs/v1` controller adapter
+contract described in [the service contract](docs/service-contract-v1.md#trusted-job-inputs).
+The default is disabled. The controller seals the actual runner spec and later
+its authenticated assignment, pre-mounts private per-job read-only publications,
+and retains the single Docker creation and teardown boundary. The immutable
+job-start hook waits for authenticated input before any workflow step. Project
+owner/baseline schemas remain in the consuming repository.
+
+The root-owned policy contains `schema`, `command` (absolute reviewed wrapper
+plus fixed arguments), `sha256` (wrapper bytes), and `mounts` (`name`, `target`
+pairs below `/run`). The controller checks the wrapper on every call. Installed
+imports/toolchains must also be pinned by the project's adapter policy. Enabling
+this requires an independently reviewed adapter and explicit image/mount/config
+installation; this change does not enable it on any deployment.

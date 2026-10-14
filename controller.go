@@ -74,6 +74,7 @@ type fleet struct {
 	allowedEvents        map[string]bool
 	services             *serviceManager
 	cleanupLog           *cleanupJournal
+	inputs               *jobInputs
 	cache                *dependencyCache
 	incremental          *incrementalCache
 	gitCache             *gitObjectCache
@@ -227,7 +228,18 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	if err = f.createContext(ctx, name, f.image, "1001", []string{"/opt/ci/runner.sh"}, env, h, network); err != nil {
+	h["NetworkMode"] = network
+	h["LogConfig"] = obj{"Type": "json-file", "Config": obj{"max-size": "5m", "max-file": "2"}}
+	spec := obj{"Image": f.image, "User": "1001", "Cmd": []string{"/opt/ci/runner.sh"}, "Env": env, "Labels": f.containerLabels(name), "HostConfig": h}
+	if err = f.prepareJobInputs(ctx, name, spec); err != nil {
+		return err
+	}
+	// Exactly one Docker create at the controller boundary, including when a
+	// project adapter supplies admission inputs. Preserve the existing identity.
+	if err = dockerContext(ctx, "POST", "/containers/create?name="+name, spec, nil); err != nil {
+		return err
+	}
+	if err = dockerContext(ctx, "POST", "/containers/"+name+"/start", nil, nil); err != nil {
 		return
 	}
 	fw := secure()
@@ -303,6 +315,10 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 				return err
 			}
 		}
+		if err := f.assignJobInputs(event); err != nil {
+			return err
+		}
+		f.changed()
 		f.cacheJobEvent(event)
 	}
 	for _, event := range msg.JobCompletedMessages {
@@ -312,7 +328,12 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 		if err := f.observeScheduler(event.RunnerName, event.RunnerID, event.JobMessageBase, event.Result); err != nil {
 			return err
 		}
-		f.cacheJobEvent(&scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase})
+		assigned := &scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase}
+		if err := f.assignJobInputs(assigned); err != nil {
+			return err
+		}
+		f.changed()
+		f.cacheJobEvent(assigned)
 		if n, ok := f.snapshot()[event.RunnerName]; ok {
 			f.cleanup(event.RunnerName, n)
 			if _, pending := f.snapshot()[event.RunnerName]; pending {
@@ -440,6 +461,12 @@ func run() error {
 			return err
 		}
 		defer f.cleanupLog.root.Close()
+	}
+	if err = f.openJobInputs(os.Getenv("JOB_INPUT_POLICY_FILE")); err != nil {
+		return err
+	}
+	if f.inputs != nil {
+		defer f.inputs.root.Close()
 	}
 	if err = f.openIncrementalCache(ctx, os.Getenv("INCREMENTAL_CACHE_POLICY_FILE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL")); err != nil {
 		return err
