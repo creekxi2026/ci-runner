@@ -33,10 +33,11 @@ type inputPolicy struct {
 	Mounts  []inputMount `json:"mounts"`
 }
 type jobInputs struct {
-	policy inputPolicy
-	root   *os.Root
-	base   string
-	uid    uint32
+	policy  inputPolicy
+	root    *os.Root
+	base    string
+	uid     uint32
+	intakes intakeState
 }
 
 func trustedInputFile(path string) ([]byte, error) {
@@ -72,7 +73,7 @@ func (f *fleet) openJobInputs(path string) error {
 		return e
 	}
 	var p inputPolicy
-	if strictServiceDecode(data, &p) != nil || p.Schema != "ci-job-inputs/v1" || len(p.Command) == 0 || len(p.Mounts) == 0 || len(p.Mounts) > 8 || f.work == nil || f.cleanupLog == nil {
+	if strictServiceDecode(data, &p) != nil || (p.Schema != "ci-job-inputs/v1" && p.Schema != "ci-job-inputs/v2") || len(p.Command) == 0 || len(p.Mounts) == 0 || len(p.Mounts) > 8 || f.work == nil || f.cleanupLog == nil {
 		return fmt.Errorf("invalid job input policy")
 	}
 	executable, e := trustedInputFile(p.Command[0])
@@ -83,9 +84,9 @@ func (f *fleet) openJobInputs(path string) error {
 	if hex.EncodeToString(digest[:]) != p.Digest {
 		return fmt.Errorf("job input adapter digest differs")
 	}
-	seen := map[string]bool{"/run/ci-input-gate": true}
+	seen := map[string]bool{"/run/ci-input-gate": true, "/run/ci-intake": true, "intake": true}
 	for _, m := range p.Mounts {
-		if !serviceID.MatchString(m.Name) || m.Name == "gate" || !strings.HasPrefix(m.Target, "/run/") || filepath.Clean(m.Target) != m.Target || seen[m.Target] || seen[m.Name] {
+		if !serviceID.MatchString(m.Name) || m.Name == "gate" || !(strings.HasPrefix(m.Target, "/run/") || p.Schema == "ci-job-inputs/v2" && intakeTarget(m.Target)) || filepath.Clean(m.Target) != m.Target || seen[m.Target] || seen[m.Name] {
 			return fmt.Errorf("invalid input mount")
 		}
 		seen[m.Target] = true
@@ -202,6 +203,9 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 		return e
 	}
 	dirs := append([]inputMount{{Name: "gate", Target: "/run/ci-input-gate"}}, b.policy.Mounts...)
+	if b.policy.Schema == "ci-job-inputs/v2" {
+		dirs = append(dirs, inputMount{Name: "intake", Target: "/run/ci-intake"})
+	}
 	host := spec["HostConfig"].(obj)
 	mounts, _ := host["Mounts"].([]obj)
 	for _, m := range dirs {
@@ -221,13 +225,16 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 	}
 	host["Mounts"] = mounts
 	spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INPUTS=1")
+	if b.policy.Schema == "ci-job-inputs/v2" {
+		spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INTAKE=1")
+	}
 	if e = b.write(name+"/spec.json", obj{"schema": "ci-job-input-spec/v1", "name": name, "owner": f.owner, "volume": f.work.volume, "spec": spec}, true); e != nil {
 		return e
 	}
 	if b.invoke(ctx, "prepare", name) != 0 {
 		return fmt.Errorf("project input preparation unavailable")
 	}
-	return nil
+	return b.startIntake(ctx, name)
 }
 func (f *fleet) assignJobInputs(event *scaleset.JobStarted) error {
 	if f.inputs == nil || event == nil {
@@ -248,6 +255,9 @@ func (f *fleet) assignJobInputs(event *scaleset.JobStarted) error {
 	return b.write(event.RunnerName+"/assignment.json", obj{"schema": "ci-job-assignment/v1", "runner_name": event.RunnerName, "runner_id": event.RunnerID, "repository": event.OwnerName + "/" + event.RepositoryName, "run_id": event.WorkflowRunID, "scheduler_job_id": event.JobID, "event": event.EventName}, true)
 }
 func (b *jobInputs) reconcile(ctx context.Context, active ...map[string]string) {
+	if b.policy.Schema == "ci-job-inputs/v2" {
+		return
+	}
 	// One 60s operation per turn; cursor commits BEFORE the attempt, so crashes,
 	// waiting and poisoned scopes cannot monopolize all following scopes.
 	entries, e := b.entries()

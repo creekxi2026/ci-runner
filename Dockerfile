@@ -51,3 +51,5 @@ USER runner
 CMD ["/opt/ci/runner.sh"]
 
 COPY --chmod=0555 job-input-gate.py /opt/ci/job-input-gate.py
+
+COPY --chmod=0444 worker_intake.py /opt/ci/worker_intake.py

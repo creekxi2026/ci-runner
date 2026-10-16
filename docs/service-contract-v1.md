@@ -345,3 +345,41 @@ A rollback stops new demand first, preserves active-job mounts and receipt
 reconciliation, and retains compatible project readers. Disabling inputs is not
 a way to run workflows requiring them. Independent cross-repository review and
 explicit installation are required before enabling this optional interface.
+
+### Authenticated allocation sessions (opt-in v2)
+
+`ci-job-inputs/v2` retains the sealed spec, assignment, gate and cleanup ownership
+above. Before Listener starts, the image-owned runner launcher interposes on the
+pinned Actions Runner 2.337.0 `Runner.Worker spawnclient` inherited anonymous pipe.
+It reads the first `NewJobRequest` frame (int32 message type, int32 byte length,
+UTF-16LE JSON) before starting the actual Worker. The initial message is bounded
+to 8 MiB. Unknown types, malformed frames and authentication timeout fail closed.
+This is a version-specific protocol adapter: a runner upgrade requires protocol
+regression evidence before enabling v2 with that version.
+
+The controller creates `/run/ci-intake/session.sock` inside this job's root-owned
+RO input subpath. It accepts once and removes the socket name before executing
+the pinned policy command. The runner sends one bounded JSON line:
+`{schema:"ci-job-intake/v1",message:<original allocation object>}`. The controller
+supplies the adapter with `{schema:"ci-job-input-session/v1",directory,message}`
+over stdin. The directory comes from the controller, never from that message.
+The generic core does not interpret project credentials or grant state authority.
+The installed adapter must authenticate the original allocation against the
+controller assignment, live provider and its exact installed workflow policy.
+
+The adapter's first stdout byte must be ASCII `0`; only that byte is forwarded.
+It must publish the normal immutable gate before acknowledging. Until then no
+Worker, hook, checkout or workflow step starts. All other stdout/stderr is
+discarded. Subsequent input, EOF, cancellation, session timeout, controller exit
+or runner reclamation revoke the helper process group. The controller waits for
+session teardown before closing its input root. The socket has no reconnect,
+credential refresh or arbitrary-command protocol. Recovery never revives a
+consumed token; a new assigned job must establish its own session. The v1 timer
+adapter is disabled for v2 scopes, so no token-file fallback runs concurrently.
+
+V2 additionally permits explicitly declared RO executable mounts below a
+project-owned `/opt/<namespace>/<subdirectory>`; core runtime/tool paths remain
+reserved. The policy command's root-owned ancestry and exact SHA256 are checked
+at startup and invocation. A project must separately pin its executable closure,
+private operation allowlist, provider checks and state publication guards. A v2
+policy does not itself provide those project guarantees or deployment authority.

@@ -487,3 +487,11 @@ pairs below `/run`). The controller checks the wrapper on every call. Installed
 imports/toolchains must also be pinned by the project's adapter policy. Enabling
 this requires an independently reviewed adapter and explicit image/mount/config
 installation; this change does not enable it on any deployment.
+
+The opt-in `ci-job-inputs/v2` [allocation session interface](docs/service-contract-v1.md#authenticated-allocation-sessions-opt-in-v2)
+intercepts the pinned Actions Runner 2.337.0 Listener-to-Worker pipe before any
+workflow step. A single-use per-job socket carries the raw allocation only in
+memory to a digest-pinned project adapter; its live session gates Worker startup
+and is revoked on cancellation, disconnect, timeout or controller exit. This
+source change requires independent boundary review and explicit installation;
+v1 deployments retain their existing behavior.

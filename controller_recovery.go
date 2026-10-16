@@ -94,6 +94,7 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 		return
 	}
 	f.cancelServices(j)
+	f.inputs.cancelIntake(n)
 	if err := f.beginCleanupObservation(n); err != nil {
 		return
 	}
@@ -431,6 +432,7 @@ func (f *fleet) maintain(ctx context.Context, interval time.Duration) {
 			if j := f.state(n); j != nil {
 				j.mu.Lock()
 				f.cancelServices(j)
+				f.inputs.cancelIntake(n)
 				j.mu.Unlock()
 			}
 		}

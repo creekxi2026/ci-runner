@@ -35,5 +35,16 @@ fi
 HOOK
 chmod 700 /tmp/ci-job-started.sh
 export ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/ci-job-started.sh
+# The ephemeral job disk has no candidate state yet. Install the image-owned
+# interposer before Listener receives its authenticated assignment. Later job
+# steps can never reconnect to the already consumed controller socket.
+if [ "${CI_JOB_INTAKE:-}" = 1 ]; then
+ mv /home/runner/bin/Runner.Worker /home/runner/bin/Runner.Worker.real
+ cat > /home/runner/bin/Runner.Worker <<'INTAKE'
+#!/bin/sh
+exec /usr/bin/python3 /opt/ci/worker_intake.py "$@"
+INTAKE
+ chmod 500 /home/runner/bin/Runner.Worker
+fi
 cd /home/runner
 exec ./run.sh
