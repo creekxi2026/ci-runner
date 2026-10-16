@@ -166,3 +166,33 @@ case "$call" in *ci-job-input-call/v1*) exit 0;; *) printf 0; sleep 30;; esac`)
 		t.Fatal("controller exit retained helper connection")
 	}
 }
+
+// Invoked explicitly by tests/native_worker_probe.py in an offline runner image.
+// The adapter is a transport fixture, not project authentication or an Actions API.
+func TestNativeWorkerProbeServer(t *testing.T) {
+	address := os.Getenv("CI_NATIVE_PROBE_SOCKET")
+	if address == "" {
+		t.Skip("explicit offline .NET probe only")
+	}
+	dir := t.TempDir()
+	command := filepath.Join(dir, "adapter.py")
+	body := []byte("#!/usr/bin/env python3\nimport json,sys,time\nx=json.loads(sys.stdin.readline())\nassert x['schema']=='ci-job-input-session/v1'\nassert x['message']['requestId']==131\nassert x['message']['jobId']=='7f5675bc-929c-4d5c-bf58-41f07d452abc'\nassert x['directory'].startswith('/tmp/native-intake-')\nprint(" + fmt.Sprintf("%q", os.Getenv("CI_NATIVE_PROBE_REPLY")) + ",end='',flush=True)\ntime.sleep(30)\n")
+	if err := os.WriteFile(command, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256(body)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: address, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	fmt.Println("listening")
+	conn, err := listener.AcceptUnix()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runIntake(ctx, conn, filepath.Dir(address), inputPolicy{Command: []string{command}, Digest: hex.EncodeToString(h[:])})
+}

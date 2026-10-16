@@ -495,3 +495,7 @@ memory to a digest-pinned project adapter; its live session gates Worker startup
 and is revoked on cancellation, disconnect, timeout or controller exit. This
 source change requires independent boundary review and explicit installation;
 v1 deployments retain their existing behavior.
+
+The [Worker protocol and offline evidence guide](docs/worker-intake-protocol.md)
+fixes the upstream executable, admission/75 waiting contract, cancellation and
+exit behavior, and the limits of the real .NET transport probe.

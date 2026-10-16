@@ -383,3 +383,10 @@ reserved. The policy command's root-owned ancestry and exact SHA256 are checked
 at startup and invocation. A project must separately pin its executable closure,
 private operation allowlist, provider checks and state publication guards. A v2
 policy does not itself provide those project guarantees or deployment authority.
+
+The [version-specific Worker protocol](worker-intake-protocol.md) specifies
+message validation, in-session bounded waiting, native exit/cancellation and
+repeatable offline executable checks. A project returning 75 must keep the same
+helper alive and wait before its first `0`; the one-shot bridge does not reconnect
+or retry an exited helper. Writes to the host socket and Worker pipe remain
+interruptible. Worker group cleanup includes descendants after leader exit.

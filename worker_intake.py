@@ -37,12 +37,35 @@ def message(fd, end):
     return kind, body.decode('utf-16-le'), header+body
 
 
-def write_all(fd, data):
+def write_all(fd, data, end, interrupts=()):
+    # A Worker can exit or stop reading before consuming a full NewJob frame.
+    # Never block cancellation/revocation behind the capacity of its pipe.
+    os.set_blocking(fd, False)
     view = memoryview(data)
     while view:
-        size = os.write(fd, view)
+        left = end-time.monotonic()
+        if left <= 0: raise ValueError('deadline')
+        ready, writable, _ = select.select(interrupts, [fd], [], min(left, .1))
+        if ready: raise ValueError('revoked channel')
+        if not writable: continue
+        try: size = os.write(fd, view)
+        except BlockingIOError: continue
         if size <= 0: raise ValueError('closed channel')
         view = view[size:]
+
+
+def unique_object(pairs):
+    result = {}
+    folded = set()
+    for key, value in pairs:
+        # The downstream .NET typed JSON properties are case insensitive.
+        if key.casefold() in folded: raise ValueError('duplicate field')
+        folded.add(key.casefold())
+        result[key] = value
+    return result
+
+
+def invalid_constant(_): raise ValueError('invalid JSON constant')
 
 
 def bridge(source, output, address, worker, *, timeout=600):
@@ -55,12 +78,14 @@ def bridge(source, output, address, worker, *, timeout=600):
     try:
         kind, body, original = message(source, end)
         if kind != 1: return 2
-        raw = json.loads(body)
+        raw = json.loads(body, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+        if not isinstance(raw, dict): return 2
         channel.settimeout(max(.001, end-time.monotonic()))
         channel.connect(address)
         payload = json.dumps(dict(schema='ci-job-intake/v1', message=raw), separators=(',', ':')).encode()+b'\n'
         if len(payload) > LIMIT: return 2
-        channel.sendall(payload)
+        write_all(channel.fileno(), payload, end, (source,))
+        channel.settimeout(max(.001, end-time.monotonic()))
         del raw, body, payload
         # Cancellation is consumed before starting Worker, including while the
         # host is waiting for provider observations or its private assignment.
@@ -78,10 +103,11 @@ def bridge(source, output, address, worker, *, timeout=600):
                 pass_fds=(child_r, output), start_new_session=True)
         finally: os.close(child_r)
         try:
-            write_all(child_w, original)
+            write_all(child_w, original, time.monotonic()+30, (source, channel))
             del original
             while child.poll() is None:
                 ready = select.select([source, channel], [], [], .1)[0]
+                if child.poll() is not None: return child.returncode
                 if channel in ready:
                     # The host closes/revokes on expiry, provider rejection or
                     # controller exit. No candidate can extend this session.
@@ -90,16 +116,19 @@ def bridge(source, output, address, worker, *, timeout=600):
                     kind, _, frame = message(source, time.monotonic()+5)
                     if kind not in (2, 3, 4): return 2
                     channel.close()  # revoke before forwarding cancellation
-                    write_all(child_w, frame)
+                    write_all(child_w, frame, time.monotonic()+5)
                     return child.wait(timeout=10)
             return child.returncode
         finally: os.close(child_w)
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, OverflowError, subprocess.SubprocessError):
         return 2  # Never echo raw messages, API bodies or exception text.
     finally:
         channel.close()
-        if child is not None and child.poll() is None:
-            os.killpg(child.pid, signal.SIGKILL)
+        if child is not None:
+            # The group can outlive its leader, including on an early Worker
+            # failure. Reap those descendants even after poll() reports exit.
+            try: os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
             child.wait()
 
 
