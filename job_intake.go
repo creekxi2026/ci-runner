@@ -5,6 +5,7 @@ package main
 // The controller never stores, logs, or grants operations from the raw message.
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const intakeLimit = 8 * 1024 * 1024
@@ -28,6 +30,65 @@ type intakeState struct {
 	mu   sync.Mutex
 	jobs map[string]context.CancelFunc
 	wg   sync.WaitGroup
+}
+
+// Allocation messages are opaque upstream JSON, including Unicode job names
+// and contexts. Service configuration's ASCII/canonical-value restrictions do
+// not apply. Retain duplicate-key, envelope and bounded-depth validation before
+// invoking the adapter, and keep the original message bytes for forwarding.
+func validIntakePacket(data []byte) bool {
+	if !utf8.Valid(data) {
+		return false
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.UseNumber()
+	var value func(int) bool
+	value = func(depth int) bool {
+		if depth > 128 {
+			return false
+		}
+		token, err := d.Token()
+		if err != nil {
+			return false
+		}
+		if delimiter, ok := token.(json.Delim); ok {
+			switch delimiter {
+			case '{':
+				seen := map[string]bool{}
+				for d.More() {
+					key, err := d.Token()
+					name, ok := key.(string)
+					if err != nil || !ok || seen[name] || (depth == 0 && name != "schema" && name != "message") {
+						return false
+					}
+					seen[name] = true
+					if !value(depth + 1) {
+						return false
+					}
+				}
+				_, err = d.Token()
+				return err == nil
+			case '[':
+				if depth == 0 {
+					return false
+				}
+				for d.More() {
+					if !value(depth + 1) {
+						return false
+					}
+				}
+				_, err = d.Token()
+				return err == nil
+			}
+			return false
+		}
+		return depth != 0
+	}
+	if !value(0) {
+		return false
+	}
+	_, err := d.Token()
+	return err == io.EOF
 }
 
 func runIntake(ctx context.Context, conn net.Conn, directory string, policy inputPolicy) {
@@ -64,7 +125,11 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 		Schema  string          `json:"schema"`
 		Message json.RawMessage `json:"message"`
 	}
-	if strictServiceDecode(data, &packet) != nil || packet.Schema != "ci-job-intake/v1" || len(packet.Message) == 0 {
+	if !validIntakePacket(data) || json.Unmarshal(data, &packet) != nil || packet.Schema != "ci-job-intake/v1" {
+		return
+	}
+	message := bytes.TrimSpace(packet.Message)
+	if len(message) == 0 || message[0] != '{' {
 		return
 	}
 	conn.SetReadDeadline(time.Time{})

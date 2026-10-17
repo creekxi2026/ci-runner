@@ -34,7 +34,11 @@ The JSON-line IPC envelope is bounded separately to 8 MiB:
 ```
 
 `message` is the original parsed allocation object, including any upstream
-variables/resources. It is not a new credential format. The controller supplies
+variables/resources. It is not a new credential format. The controller forwards
+Unicode job names and context strings unchanged; service configuration's ASCII
+restrictions do not apply to this opaque allocation. The intake envelope still
+requires its exact schema/fields, an object message, unique JSON keys, valid
+UTF-8 and bounded nesting before any adapter process starts. The controller supplies
 its own private directory and forwards
 `{schema:"ci-job-input-session/v1",directory,message}` to the digest-pinned
 command. The installed adapter must match job/run/attempt/runner identities to

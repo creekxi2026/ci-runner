@@ -60,6 +60,10 @@ func TestIntakeRejectsMalformedPacketsBeforeAdapter(t *testing.T) {
 		strings.Repeat("x", intakeLimit+1),
 		`{"schema":"ci-job-intake/v1","message":{},"extra":true}` + "\n",
 		`{"schema":"ci-job-intake/v1","message":{"id":1,"id":2}}` + "\n",
+		`{"schema":"ci-job-intake/v1","schema":"ci-job-intake/v1","message":{}}` + "\n",
+		`{"Schema":"ci-job-intake/v1","message":{}}` + "\n",
+		`{"schema":"ci-job-intake/v1","message":null}` + "\n",
+		`{"schema":"ci-job-intake/v1","message":[]}` + "\n",
 	} {
 		t.Run(payload[:12], func(t *testing.T) {
 			dir := t.TempDir()
@@ -86,6 +90,39 @@ func TestIntakeRejectsMalformedPacketsBeforeAdapter(t *testing.T) {
 				t.Fatal("malformed packet executed adapter")
 			}
 		})
+	}
+}
+
+func TestIntakePreservesUnicodeAllocationThroughActualAdapter(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "adapter.py")
+	body := []byte("#!/usr/bin/env python3\nimport json,sys,time\nx=json.loads(sys.stdin.readline())\nassert x['message']['jobDisplayName']=='登记验证结论'\nassert x['message']['contextData']['github']['event']['ref']=='分支/修复-🧪'\nprint('0',end='',flush=True)\ntime.sleep(30)\n")
+	if err := os.WriteFile(command, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256(body)
+	host, worker := net.Pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	defer worker.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer host.Close()
+		runIntake(ctx, host, dir, inputPolicy{Command: []string{command}, Digest: hex.EncodeToString(h[:])})
+	}()
+	message := obj{"jobDisplayName": "登记验证结论", "contextData": obj{"github": obj{"event": obj{"ref": "分支/修复-🧪"}}}}
+	if err := json.NewEncoder(worker).Encode(obj{"schema": "ci-job-intake/v1", "message": message}); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := bufio.NewReader(worker).ReadByte(); err != nil || value != '0' {
+		t.Fatalf("Unicode allocation did not reach the actual adapter: %c %v", value, err)
+	}
+	worker.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Unicode allocation retained its helper")
 	}
 }
 
