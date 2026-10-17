@@ -3,6 +3,14 @@ on:
   pull_request:
     paths:
       - Dockerfile
+      - worker_intake.py
+      - job_intake.go
+      - job_intake_test.go
+      - job_inputs.go
+      - job_inputs_test.go
+      - runner.sh
+      - tests/test_worker_intake.py
+      - tests/native_worker_probe.py
       - incremental_*.go
       - git_cache.go
       - git_cache_test.go

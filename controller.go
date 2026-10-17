@@ -467,6 +467,7 @@ func run() error {
 	}
 	if f.inputs != nil {
 		defer f.inputs.root.Close()
+		defer f.inputs.closeIntakes()
 	}
 	if err = f.openIncrementalCache(ctx, os.Getenv("INCREMENTAL_CACHE_POLICY_FILE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL")); err != nil {
 		return err
