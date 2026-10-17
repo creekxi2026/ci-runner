@@ -170,11 +170,11 @@ func (b *jobInputs) invoke(ctx context.Context, operation, name string) int {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, b.policy.Command[0], b.policy.Command[1:]...)
-	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE=1"}
+	cmd.Env = intakeEnvironment()
 	body, _ := json.Marshal(obj{"schema": "ci-job-input-call/v1", "operation": operation, "directory": filepath.Join(b.root.Name(), name)})
 	cmd.Stdin = bytes.NewReader(body)
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &intakeStderr{job: name}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
@@ -189,6 +189,7 @@ func (b *jobInputs) invoke(ctx context.Context, operation, name string) int {
 }
 func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) error {
 	b := f.inputs
+	intakeEvent(name, "controller", "prepare_started")
 	if b == nil {
 		return nil
 	}
@@ -227,6 +228,9 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 	spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INPUTS=1")
 	if b.policy.Schema == "ci-job-inputs/v2" {
 		spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INTAKE=1")
+		if intakeEnabled() {
+			spec["Env"] = append(spec["Env"].([]string), "CI_INTAKE_DIAGNOSTICS=1")
+		}
 	}
 	if e = b.write(name+"/spec.json", obj{"schema": "ci-job-input-spec/v1", "name": name, "owner": f.owner, "volume": f.work.volume, "spec": spec}, true); e != nil {
 		return e
@@ -234,6 +238,7 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 	if b.invoke(ctx, "prepare", name) != 0 {
 		return fmt.Errorf("project input preparation unavailable")
 	}
+	intakeEvent(name, "controller", "prepare_ready")
 	return b.startIntake(ctx, name)
 }
 func (f *fleet) assignJobInputs(event *scaleset.JobStarted) error {
