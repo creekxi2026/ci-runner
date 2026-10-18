@@ -390,3 +390,7 @@ repeatable offline executable checks. A project returning 75 must keep the same
 helper alive and wait before its first `0`; the one-shot bridge does not reconnect
 or retry an exited helper. Writes to the host socket and Worker pipe remain
 interruptible. Worker group cleanup includes descendants after leader exit.
+
+Optional pre-Worker stage observations follow
+[intake-diagnostics-v1](intake-diagnostics-v1.md); they grant no service authority
+and preserve the one-use intake and ready protocol.

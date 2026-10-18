@@ -31,6 +31,7 @@ type jobState struct {
 	disk                         bool
 	shared                       bool
 	diagnosticsCaptured          bool
+	intakeDiagnosticsCaptured    bool
 	cacheEvent                   *scaleset.JobStarted
 	cacheAttempted               bool
 	cleanupFinalizing            bool   // resources removed; release and evidence commits may need retry
@@ -101,6 +102,10 @@ func (f *fleet) cleanJob(n, network string, j *jobState) {
 	resources := []string{n, n + "-fw", n + "-pg", n + "-proxy"}
 	if j.recovered {
 		resources = j.resources
+	}
+	if !j.intakeDiagnosticsCaptured {
+		captureIntakeDiagnostics(n)
+		j.intakeDiagnosticsCaptured = true
 	}
 	for _, r := range resources {
 		if r == n+"-proxy" && !j.diagnosticsCaptured {

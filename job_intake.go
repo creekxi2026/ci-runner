@@ -92,6 +92,9 @@ func validIntakePacket(data []byte) bool {
 }
 
 func runIntake(ctx context.Context, conn net.Conn, directory string, policy inputPolicy) {
+	job := intakeJob(directory)
+	intakeEvent(job, "controller", "packet_read")
+	defer intakeEvent(job, "controller", "session_closed")
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	closed := make(chan struct{})
@@ -119,6 +122,7 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 		}
 	}
 	if e != nil || len(data) > intakeLimit {
+		intakeEvent(job, "controller", "packet_rejected")
 		return
 	}
 	var packet struct {
@@ -126,12 +130,15 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 		Message json.RawMessage `json:"message"`
 	}
 	if !validIntakePacket(data) || json.Unmarshal(data, &packet) != nil || packet.Schema != "ci-job-intake/v1" {
+		intakeEvent(job, "controller", "packet_rejected")
 		return
 	}
 	message := bytes.TrimSpace(packet.Message)
 	if len(message) == 0 || message[0] != '{' {
+		intakeEvent(job, "controller", "packet_rejected")
 		return
 	}
+	intakeEvent(job, "controller", "packet_parsed")
 	conn.SetReadDeadline(time.Time{})
 	// No reconnect or second request. Closing the client or sending even one byte
 	// cancels the process group, including while initial provider reads block.
@@ -145,7 +152,8 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 		return
 	}
 	cmd := exec.CommandContext(ctx, policy.Command[0], policy.Command[1:]...)
-	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE=1"}
+	intakeEvent(job, "controller", "helper_checked")
+	cmd.Env = intakeEnvironment()
 	call, _ := json.Marshal(obj{"schema": "ci-job-input-session/v1", "directory": directory, "message": packet.Message})
 	stdin, e := cmd.StdinPipe()
 	if e != nil {
@@ -155,16 +163,19 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 	if e != nil {
 		return
 	}
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &intakeStderr{job: job}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
 	if cmd.Start() != nil {
+		intakeEvent(job, "controller", "helper_start_failed")
 		return
 	}
+	intakeEvent(job, "controller", "helper_started")
 	go func() { defer stdin.Close(); stdin.Write(append(call, '\n')) }()
 	var status [1]byte
 	if _, e = io.ReadFull(stdout, status[:]); e == nil && status[0] == '0' && ctx.Err() == nil {
+		intakeEvent(job, "controller", "helper_ready")
 		// This single byte is the ONLY response exposed to the unprivileged proxy.
 		conn.SetWriteDeadline(time.Now().Add(time.Second))
 		if _, e = conn.Write(status[:]); e == nil {
@@ -173,6 +184,10 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 	}
 	cancel()
 	cmd.Wait()
+	if cmd.ProcessState != nil {
+		intakeExit(job, "controller", cmd.ProcessState.ExitCode())
+	}
+	intakeEvent(job, "controller", "helper_exit")
 }
 
 func (b *jobInputs) startIntake(_ context.Context, name string) error {
@@ -214,6 +229,7 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	b.intakes.jobs[name] = cancel
+	intakeEvent(name, "controller", "socket_listening")
 	b.intakes.wg.Add(1)
 	go func() {
 		defer b.intakes.wg.Done()
@@ -234,6 +250,7 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 			return
 		}
 		defer conn.Close()
+		intakeEvent(name, "controller", "socket_accepted")
 		listener.Close()
 		os.Remove(address) // one successful accept, for this job only
 		// assignment events and the pipe may race. Wait only inside the job lifetime.
@@ -246,9 +263,11 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 				return
 			}
 		}
+		intakeEvent(name, "controller", "assignment_ready")
 		if _, e = trustedInputFile(b.policy.Command[0]); e != nil {
 			return
 		}
+		intakeEvent(name, "controller", "helper_trusted")
 		runIntake(ctx, conn, filepath.Join(b.root.Name(), name), b.policy)
 	}()
 	return nil

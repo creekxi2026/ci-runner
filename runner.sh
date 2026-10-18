@@ -1,5 +1,11 @@
 #!/bin/sh
 set -eu
+if [ "${CI_INTAKE_DIAGNOSTICS:-}" = 1 ]; then
+ /usr/bin/python3 -I -c 'import os,select
+try:
+ if select.select([], [2], [], 0)[1]: os.write(2,b"ci-intake/v1 runner_entry\n")
+except (OSError,ValueError): pass' || :
+fi
 n=0
 while [ ! -e /tmp/ci-network-ready ]; do
  n=$((n+1)); [ "$n" -lt 120 ] || exit 1
@@ -45,6 +51,12 @@ if [ "${CI_JOB_INTAKE:-}" = 1 ]; then
 exec /usr/bin/python3 /opt/ci/worker_intake.py "$@"
 INTAKE
  chmod 500 /home/runner/bin/Runner.Worker
+ if [ "${CI_INTAKE_DIAGNOSTICS:-}" = 1 ]; then
+  /usr/bin/python3 -I -c 'import os,select
+try:
+ if select.select([], [2], [], 0)[1]: os.write(2,b"ci-intake/v1 interposer_installed\n")
+except (OSError,ValueError): pass' || :
+ fi
 fi
 cd /home/runner
 exec ./run.sh

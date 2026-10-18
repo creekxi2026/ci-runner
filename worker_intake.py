@@ -18,6 +18,19 @@ import time
 LIMIT = 8 * 1024 * 1024
 
 
+# Fixed stage names only; writes are nonblocking, best effort and bounded.
+class Diagnostic:
+    def __init__(self): self.count = 0
+    def emit(self, stage, code=None):
+        if os.environ.get('CI_INTAKE_DIAGNOSTICS') != '1' or self.count >= 32: return
+        self.count += 1
+        try:
+            # stderr is launcher-owned before Worker starts. Do not change its
+            # file status flags: the native Worker inherits this descriptor.
+            if select.select([], [2], [], 0)[1]: os.write(2, ('ci-intake/v1 '+stage+((' code='+str(code)) if type(code) is int and -1 <= code <= 255 else '')+'\n').encode())
+        except (OSError, ValueError): pass
+
+
 def exact(fd, size, end):
     data = bytearray()
     while len(data) < size:
@@ -69,6 +82,7 @@ def invalid_constant(_): raise ValueError('invalid JSON constant')
 
 
 def bridge(source, output, address, worker, *, timeout=600):
+    diag = Diagnostic()
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     end = time.monotonic()+timeout
     child = None
@@ -76,12 +90,18 @@ def bridge(source, output, address, worker, *, timeout=600):
     def stop(*_): raise ValueError('terminated')
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP): signal.signal(sig, stop)
     try:
+        os.fstat(source); os.fstat(output)
+        diag.emit("fd_checked")
+        diag.emit("frame_read")
         kind, body, original = message(source, end)
         if kind != 1: return 2
         raw = json.loads(body, object_pairs_hook=unique_object, parse_constant=invalid_constant)
         if not isinstance(raw, dict): return 2
+        diag.emit("frame_parsed")
         channel.settimeout(max(.001, end-time.monotonic()))
+        diag.emit("socket_connect")
         channel.connect(address)
+        diag.emit("socket_connected")
         payload = json.dumps(dict(schema='ci-job-intake/v1', message=raw), separators=(',', ':')).encode()+b'\n'
         if len(payload) > LIMIT: return 2
         write_all(channel.fileno(), payload, end, (source,))
@@ -89,19 +109,24 @@ def bridge(source, output, address, worker, *, timeout=600):
         del raw, body, payload
         # Cancellation is consumed before starting Worker, including while the
         # host is waiting for provider observations or its private assignment.
+        diag.emit("host_wait")
         while True:
             left = end-time.monotonic()
             if left <= 0: return 2
             ready = select.select([source, channel], [], [], left)[0]
             if source in ready: return 2
             if channel in ready:
-                if channel.recv(1) != b'0': return 2
+                if channel.recv(1) != b'0':
+                    diag.emit('host_rejected'); return 2
+                diag.emit('host_ready')
                 break
         child_r, child_w = os.pipe()
         try:
+            diag.emit("worker_start")
             child = subprocess.Popen([worker, 'spawnclient', str(child_r), str(output)],
                 pass_fds=(child_r, output), start_new_session=True)
         finally: os.close(child_r)
+        diag.emit("worker_started")
         try:
             write_all(child_w, original, time.monotonic()+30, (source, channel))
             del original
@@ -121,8 +146,10 @@ def bridge(source, output, address, worker, *, timeout=600):
             return child.returncode
         finally: os.close(child_w)
     except (OSError, ValueError, TypeError, KeyError, RecursionError, OverflowError, subprocess.SubprocessError):
+        diag.emit("bridge_rejected")
         return 2  # Never echo raw messages, API bodies or exception text.
     finally:
+        diag.emit("session_closed")
         channel.close()
         if child is not None:
             # The group can outlive its leader, including on an early Worker
@@ -130,10 +157,14 @@ def bridge(source, output, address, worker, *, timeout=600):
             try: os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError: pass
             child.wait()
+            diag.emit("worker_exit", child.returncode)
 
 
 def main():
-    if len(sys.argv) != 4 or sys.argv[1] != 'spawnclient': return 2
+    diag = Diagnostic()
+    if len(sys.argv) != 4 or sys.argv[1] != 'spawnclient':
+        diag.emit('cli_rejected'); return 2
+    diag.emit('cli_checked')
     try:
         return bridge(int(sys.argv[2]), int(sys.argv[3]), '/run/ci-intake/session.sock',
                       '/home/runner/bin/Runner.Worker.real')
