@@ -8,6 +8,10 @@ on:
       - job_intake_test.go
       - job_inputs.go
       - job_inputs_test.go
+      - intake_diagnostics.go
+      - intake_diagnostics_test.go
+      - intake_observation_test.go
+      - intake_run_diagnostics_test.go
       - runner.sh
       - tests/test_worker_intake.py
       - tests/native_worker_probe.py
