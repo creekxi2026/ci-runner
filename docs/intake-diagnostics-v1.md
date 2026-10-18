@@ -25,7 +25,7 @@ Historical journals are unchanged. Worker messages are advisory observations,
 never trusted identity or evidence of admission: job code could forge them.
 
 Interpret the producer chain separately: prepare -> runner entry -> interposer
-CLI/FD -> frame -> socket connect/accept -> assignment -> packet -> checked helper
+CLI/FD -> frame -> socket connect/accept -> packet -> assignment wait -> checked helper
 -> installation/scope -> identity/provider -> gate -> ready -> Worker -> exit.
 The helper must publish its existing gate before writing `0`. Streams drain
 asynchronously, so their display order is not a cross-process clock. An absent
@@ -33,3 +33,16 @@ record is unknown (disabled, dropped, truncated, failed sink, or unreached), not
 reason to infer token, FD, provider or Worker failure. Replaying a token or socket
 is still forbidden. Native Listener allocation and provider identity require
 separate native evidence; offline diagnostics do not establish a native cause.
+
+`assignment_wait` follows packet validation; `assignment_ready` precedes helper
+execution. `assignment_unavailable` means this wait ended without readiness
+(including cancellation/disconnect), not proof of a scheduler timeout. Scheduler
+publication and Listener delivery are independent; assignment can arrive first
+or later. A completed-event fallback can also publish assignment during cleanup,
+so file mtime alone cannot identify the scheduler event that produced it.
+
+Native JobDispatcher subscribes to ProcessInvoker's stderr events and collects
+Worker output internally. The bridge's stderr stages may therefore be absent
+from Docker stderr even when it connected successfully. Collection timestamps
+are not the original worker emission timestamps. The offline native probe can
+explicitly forward fixed stages; production does not change Listener assemblies.

@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const intakeStages = " prepare_started prepare_ready socket_listening socket_accepted assignment_ready helper_trusted packet_read packet_parsed packet_rejected helper_checked helper_started helper_start_failed helper_ready session_closed helper_exit cli_checked cli_rejected fd_checked frame_read frame_parsed socket_connect socket_connected host_wait host_ready host_rejected worker_start worker_started worker_exit bridge_rejected runner_entry interposer_installed helper_entry installation_ready call_parsed call_rejected scope_checked token_fields_present token_fields_absent token_present identity_check identity_ready provider_read provider_ok provider_rejected http_2xx http_4xx http_5xx http_unknown gate_published ready_sent helper_rejected "
+const intakeStages = " prepare_started prepare_ready socket_listening socket_accepted assignment_wait assignment_unavailable assignment_ready helper_trusted packet_read packet_parsed packet_rejected helper_checked helper_started helper_start_failed helper_ready session_closed helper_exit cli_checked cli_rejected fd_checked frame_read frame_parsed socket_connect socket_connected host_wait host_ready host_rejected worker_start worker_started worker_exit bridge_rejected runner_entry interposer_installed helper_entry installation_ready call_parsed call_rejected scope_checked token_fields_present token_fields_absent token_present identity_check identity_ready provider_read provider_ok provider_rejected http_2xx http_4xx http_5xx http_unknown gate_published ready_sent helper_rejected "
 
 func intakeEnabled() bool { return os.Getenv("CI_INTAKE_DIAGNOSTICS") == "1" }
 func safeIntakeStage(s string) bool {

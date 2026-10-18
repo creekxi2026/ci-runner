@@ -26,6 +26,29 @@ import (
 
 const intakeLimit = 8 * 1024 * 1024
 
+// Match the proxy's initial admission budget. The proxy starts its clock first
+// and disconnects on expiry, so this can never extend its authority or lifetime.
+const intakeAssignmentWait = 600 * time.Second
+
+func waitIntakeAssignment(ctx context.Context, directory string) bool {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	ctx, cancel := context.WithTimeout(ctx, intakeAssignmentWait)
+	defer cancel()
+	for ctx.Err() == nil {
+		if _, err := root.Stat("assignment.json"); err == nil {
+			return true
+		}
+		if !pause(ctx, 100*time.Millisecond) {
+			return false
+		}
+	}
+	return false
+}
+
 type intakeState struct {
 	mu   sync.Mutex
 	jobs map[string]context.CancelFunc
@@ -143,6 +166,15 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 	// No reconnect or second request. Closing the client or sending even one byte
 	// cancels the process group, including while initial provider reads block.
 	go func() { var b [1]byte; reader.Read(b[:]); cancel() }()
+	// Consume/validate the packet before waiting for the independently delivered
+	// scheduler observation. EOF, cancellation or another byte now revokes the
+	// wait as well as the helper; an empty readiness probe cannot reach a helper.
+	intakeEvent(job, "controller", "assignment_wait")
+	if !waitIntakeAssignment(ctx, directory) {
+		intakeEvent(job, "controller", "assignment_unavailable")
+		return
+	}
+	intakeEvent(job, "controller", "assignment_ready")
 	source, e := os.ReadFile(policy.Command[0])
 	if e != nil {
 		return
@@ -253,17 +285,6 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 		intakeEvent(name, "controller", "socket_accepted")
 		listener.Close()
 		os.Remove(address) // one successful accept, for this job only
-		// assignment events and the pipe may race. Wait only inside the job lifetime.
-		end := time.Now().Add(30 * time.Second)
-		for {
-			if _, e = b.root.Stat(name + "/assignment.json"); e == nil {
-				break
-			}
-			if !time.Now().Before(end) || !pause(ctx, 100*time.Millisecond) {
-				return
-			}
-		}
-		intakeEvent(name, "controller", "assignment_ready")
 		if _, e = trustedInputFile(b.policy.Command[0]); e != nil {
 			return
 		}

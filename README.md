@@ -496,6 +496,10 @@ and is revoked on cancellation, disconnect, timeout or controller exit. This
 source change requires independent boundary review and explicit installation;
 v1 deployments retain their existing behavior.
 
+V2 validates the packet before waiting for the independent scheduler assignment.
+That wait shares the proxy's existing initial admission budget and observes
+disconnect/cancellation; assignment delay does not create a new token lifetime.
+
 The [Worker protocol and offline evidence guide](docs/worker-intake-protocol.md)
 fixes the upstream executable, admission/75 waiting contract, cancellation and
 exit behavior, and the limits of the real .NET transport probe.
