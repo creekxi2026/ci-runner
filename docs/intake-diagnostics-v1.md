@@ -35,6 +35,31 @@ records remain unknown (off, lost, truncated, logging failure or unreached).
 Consumers must check the exact schema and source/stage/evidence combination;
 no diagnostic record is a trusted release receipt or a successful job result.
 
+## Provider decoding and run comparison observations
+
+The project helper may emit `provider_decode_ready` after its existing strict
+JSON decoder returns, or `provider_decode_rejected` before rethrowing a decode
+exception. `provider_ok` alone describes response acquisition, not JSON validity.
+These observations contain no response, key, number, credential or exception text.
+
+Before reading the assigned jobs, the helper compares the run to its original
+assignment and Listener context in its existing short-circuit order. Only the
+first failed comparison emits a fixed reason: `run_id_diff`, `run_attempt_diff`,
+`run_status_diff`, `run_conclusion_diff`, `run_workflow_diff`,
+`run_repository_diff`, `run_repository_id_diff`, `run_context_repository_id_diff`,
+`run_event_diff` or `run_actor_diff`. Missing or wrongly shaped objects emit
+`run_shape_rejected` and preserve the original exception. `run_identity_ready`
+means these run comparisons returned successfully; job/cohort/workflow checks
+and the gate still follow. It does not mean `identity_ready` or admission.
+
+The helper deduplicates each stage per process, so decoding observations do not
+count reads or identify a response. All these stages are helper-only, forwarded,
+optional and subject to the existing line/record bounds. Absent records remain
+unknown. The generic collector only recognizes the vocabulary; the project owns
+the comparisons, strict decoder and meaning of their outcomes. No retries,
+fallback decoding, changed predicates, expanded budgets or raw field logging
+are introduced.
+
 ## Scheduler and durability observations
 
 The handler confirms a current allocation through the live fleet state, its
