@@ -26,10 +26,34 @@ import (
 
 const intakeLimit = 8 * 1024 * 1024
 
+// Match the proxy's initial admission budget. The proxy starts its clock first
+// and disconnects on expiry, so this can never extend its authority or lifetime.
+const intakeAssignmentWait = 600 * time.Second
+
+func waitIntakeAssignment(ctx context.Context, directory string) bool {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	ctx, cancel := context.WithTimeout(ctx, intakeAssignmentWait)
+	defer cancel()
+	for ctx.Err() == nil {
+		if _, err := root.Stat("assignment.json"); err == nil {
+			return true
+		}
+		if !pause(ctx, 100*time.Millisecond) {
+			return false
+		}
+	}
+	return false
+}
+
 type intakeState struct {
-	mu   sync.Mutex
-	jobs map[string]context.CancelFunc
-	wg   sync.WaitGroup
+	mu       sync.Mutex
+	jobs     map[string]context.CancelFunc
+	material map[string]*intakeMaterial
+	wg       sync.WaitGroup
 }
 
 // Allocation messages are opaque upstream JSON, including Unicode job names
@@ -143,6 +167,15 @@ func runIntake(ctx context.Context, conn net.Conn, directory string, policy inpu
 	// No reconnect or second request. Closing the client or sending even one byte
 	// cancels the process group, including while initial provider reads block.
 	go func() { var b [1]byte; reader.Read(b[:]); cancel() }()
+	// Consume/validate the packet before waiting for the independently delivered
+	// scheduler observation. EOF, cancellation or another byte now revokes the
+	// wait as well as the helper; an empty readiness probe cannot reach a helper.
+	intakeEvent(job, "controller", "assignment_wait")
+	if !waitIntakeAssignment(ctx, directory) {
+		intakeEvent(job, "controller", "assignment_unavailable")
+		return
+	}
+	intakeEvent(job, "controller", "assignment_ready")
 	source, e := os.ReadFile(policy.Command[0])
 	if e != nil {
 		return
@@ -229,10 +262,32 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	b.intakes.jobs[name] = cancel
+	material, e := newIntakeMaterial()
+	if e != nil {
+		cancel()
+		listener.Close()
+		os.Remove(address)
+		return e
+	}
+	if b.intakes.material == nil {
+		b.intakes.material = map[string]*intakeMaterial{}
+	}
+	b.intakes.material[name] = material
+	expiry := time.AfterFunc(time.Until(material.expires), func() {
+		b.intakes.mu.Lock()
+		defer b.intakes.mu.Unlock()
+		if m := b.intakes.material[name]; m != nil {
+			m.clear()
+			delete(b.intakes.material, name)
+			cancel()
+		}
+	})
 	intakeEvent(name, "controller", "socket_listening")
 	b.intakes.wg.Add(1)
 	go func() {
 		defer b.intakes.wg.Done()
+		defer expiry.Stop()
+		defer b.eraseBootstrap(name)
 		defer cancel()
 		defer listener.Close()
 		defer os.Remove(address)
@@ -253,17 +308,11 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 		intakeEvent(name, "controller", "socket_accepted")
 		listener.Close()
 		os.Remove(address) // one successful accept, for this job only
-		// assignment events and the pipe may race. Wait only inside the job lifetime.
-		end := time.Now().Add(30 * time.Second)
-		for {
-			if _, e = b.root.Stat(name + "/assignment.json"); e == nil {
-				break
-			}
-			if !time.Now().Before(end) || !pause(ctx, 100*time.Millisecond) {
-				return
-			}
+		if !b.bindIntake(ctx, name, conn) {
+			intakeEvent(name, "controller", "session_rejected")
+			return
 		}
-		intakeEvent(name, "controller", "assignment_ready")
+		intakeEvent(name, "controller", "session_bound")
 		if _, e = trustedInputFile(b.policy.Command[0]); e != nil {
 			return
 		}
@@ -279,6 +328,10 @@ func (b *jobInputs) cancelIntake(name string) {
 	}
 	b.intakes.mu.Lock()
 	defer b.intakes.mu.Unlock()
+	if m := b.intakes.material[name]; m != nil {
+		m.clear()
+		delete(b.intakes.material, name)
+	}
 	if cancel := b.intakes.jobs[name]; cancel != nil {
 		cancel()
 		delete(b.intakes.jobs, name)
@@ -288,6 +341,10 @@ func (b *jobInputs) cancelIntake(name string) {
 func (b *jobInputs) closeIntakes() {
 	b.intakes.mu.Lock()
 	for name, cancel := range b.intakes.jobs {
+		if m := b.intakes.material[name]; m != nil {
+			m.clear()
+			delete(b.intakes.material, name)
+		}
 		cancel()
 		delete(b.intakes.jobs, name)
 	}

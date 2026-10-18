@@ -239,8 +239,21 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if err = dockerContext(ctx, "POST", "/containers/create?name="+name, spec, nil); err != nil {
 		return err
 	}
+	bootstrap, attachErr := f.attachBootstrap(ctx, name)
+	if attachErr != nil {
+		return attachErr
+	}
+	if bootstrap != nil {
+		defer bootstrap.Close()
+	}
 	if err = dockerContext(ctx, "POST", "/containers/"+name+"/start", nil, nil); err != nil {
 		return
+	}
+	if bootstrap != nil {
+		if err = f.inputs.sendBootstrap(name, bootstrap); err != nil {
+			return err
+		}
+		bootstrap.Close()
 	}
 	fw := secure()
 	fw["CapAdd"] = []string{"NET_ADMIN"}
@@ -315,7 +328,7 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 				return err
 			}
 		}
-		if err := f.assignJobInputs(event); err != nil {
+		if err := f.observeInputAssignment(event, false); err != nil {
 			return err
 		}
 		f.changed()
@@ -329,7 +342,7 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 			return err
 		}
 		assigned := &scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase}
-		if err := f.assignJobInputs(assigned); err != nil {
+		if err := f.observeInputAssignment(assigned, true); err != nil {
 			return err
 		}
 		f.changed()

@@ -70,6 +70,15 @@ adapter's shorter token/evidence/work deadline. Waiting inside a single helper
 is compatible with the one-shot socket; exiting 75 and expecting a reconnect is
 not compatible. The existing v1 hook's timeout is not a v2 retry mechanism.
 
+The controller first validates the bounded packet (30-second read limit), then
+waits for its own assignment for at most 600 seconds, within the job context.
+The proxy's 600-second clock starts earlier; expiry/cancellation closes the peer
+and cancels this wait. EOF or any additional byte also cancels while assignment
+is missing. No helper or Worker starts before assignment. An empty early probe
+still consumes the single-use socket and fails closed; it grants no reconnect.
+This handles independent scheduler/pipe delivery within admission's existing
+budget; it does not guarantee scheduler delivery or establish an onsite cause.
+
 Both outbound IPC and first Worker-frame delivery are nonblocking and observe
 revocation/cancel input. The first Worker frame has a 30-second delivery bound.
 Cancellation before admission or during a partial first-frame delivery aborts
@@ -113,3 +122,7 @@ an authorized real platform run. Native successful/failed/cancelled job status,
 server result publication and exact installed project adapters remain separate
 integration/onsite evidence. No echo Worker or skipped workflow substitutes for
 those results.
+
+Before this v1 envelope is sent, production v2 startup requires the one-use
+[allocation binding handshake](intake-startup-binding.md). Direct bridge fixture
+calls do not represent a production admission entry.

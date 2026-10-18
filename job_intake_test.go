@@ -19,6 +19,13 @@ import (
 
 func TestIntakeDisconnectKillsAdapterAndNeverPersistsJobMessage(t *testing.T) {
 	dir := t.TempDir()
+	directory := filepath.Join(dir, "ci-job-dummy")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "assignment.json"), []byte(`{"fixture":true}`), 0444); err != nil {
+		t.Fatal(err)
+	}
 	command := filepath.Join(dir, "adapter.py")
 	body := []byte("#!/usr/bin/env python3\nimport json,sys,time\nx=json.loads(sys.stdin.readline())\nassert x['message']['variables']['system.github.token']['value']=='fixture-secret'\nassert x['directory'].endswith('ci-job-dummy')\nprint('0',end='',flush=True)\ntime.sleep(30)\n")
 	if e := os.WriteFile(command, body, 0700); e != nil {
@@ -35,7 +42,7 @@ func TestIntakeDisconnectKillsAdapterAndNeverPersistsJobMessage(t *testing.T) {
 	go func() {
 		defer close(done)
 		defer host.Close()
-		runIntake(ctx, host, filepath.Join(dir, "ci-job-dummy"), policy)
+		runIntake(ctx, host, directory, policy)
 	}()
 	msg := obj{"schema": "ci-job-intake/v1", "message": obj{"variables": obj{"system.github.token": obj{"value": "fixture-secret"}}}}
 	json.NewEncoder(worker).Encode(msg)
@@ -49,8 +56,12 @@ func TestIntakeDisconnectKillsAdapterAndNeverPersistsJobMessage(t *testing.T) {
 		t.Fatal("disconnected helper survived")
 	}
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 || entries[0].Name() != "adapter.py" {
+	if len(entries) != 2 || entries[0].Name() != "adapter.py" || entries[1].Name() != "ci-job-dummy" {
 		t.Fatal("session left files")
+	}
+	entries, _ = os.ReadDir(directory)
+	if len(entries) != 1 || entries[0].Name() != "assignment.json" {
+		t.Fatal("allocation persisted data")
 	}
 }
 
@@ -95,6 +106,9 @@ func TestIntakeRejectsMalformedPacketsBeforeAdapter(t *testing.T) {
 
 func TestIntakePreservesUnicodeAllocationThroughActualAdapter(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "assignment.json"), []byte(`{"fixture":true}`), 0444); err != nil {
+		t.Fatal(err)
+	}
 	command := filepath.Join(dir, "adapter.py")
 	body := []byte("#!/usr/bin/env python3\nimport json,sys,time\nx=json.loads(sys.stdin.readline())\nassert x['message']['jobDisplayName']=='登记验证结论'\nassert x['message']['contextData']['github']['event']['ref']=='分支/修复-🧪'\nprint('0',end='',flush=True)\ntime.sleep(30)\n")
 	if err := os.WriteFile(command, body, 0700); err != nil {
@@ -183,12 +197,18 @@ case "$call" in *ci-job-input-call/v1*) exit 0;; *) printf 0; sleep 30;; esac`)
 		t.Fatal(err)
 	}
 	defer socketDir.Close()
+	material, err := b.takeBootstrap(name)
+	if err != nil {
+		t.Fatal("fixture bootstrap unavailable")
+	}
+	defer clear(material)
 	conn, err := net.DialTimeout("unix", fmt.Sprintf("/proc/self/fd/%d/session.sock", socketDir.Fd()), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	testAuthenticateIntake(t, conn, material)
 	if err = json.NewEncoder(conn).Encode(obj{"schema": "ci-job-intake/v1", "message": obj{"jobId": "opaque"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +232,9 @@ func TestNativeWorkerProbeServer(t *testing.T) {
 		t.Skip("explicit offline .NET probe only")
 	}
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "assignment.json"), []byte(`{"fixture":true}`), 0444); err != nil {
+		t.Fatal(err)
+	}
 	command := filepath.Join(dir, "adapter.py")
 	body := []byte("#!/usr/bin/env python3\nimport json,sys,time\nx=json.loads(sys.stdin.readline())\nassert x['schema']=='ci-job-input-session/v1'\nassert x['message']['requestId']==131\nassert x['message']['jobId']=='7f5675bc-929c-4d5c-bf58-41f07d452abc'\nassert x['directory'].startswith('/tmp/native-intake-')\nprint(" + fmt.Sprintf("%q", os.Getenv("CI_NATIVE_PROBE_REPLY")) + ",end='',flush=True)\ntime.sleep(30)\n")
 	if err := os.WriteFile(command, body, 0700); err != nil {

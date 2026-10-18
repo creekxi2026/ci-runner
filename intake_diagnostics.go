@@ -16,22 +16,66 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-const intakeStages = " prepare_started prepare_ready socket_listening socket_accepted assignment_ready helper_trusted packet_read packet_parsed packet_rejected helper_checked helper_started helper_start_failed helper_ready session_closed helper_exit cli_checked cli_rejected fd_checked frame_read frame_parsed socket_connect socket_connected host_wait host_ready host_rejected worker_start worker_started worker_exit bridge_rejected runner_entry interposer_installed helper_entry installation_ready call_parsed call_rejected scope_checked token_fields_present token_fields_absent token_present identity_check identity_ready provider_read provider_ok provider_rejected http_2xx http_4xx http_5xx http_unknown gate_published ready_sent helper_rejected "
+// Source/stage pairs are disjoint. Legacy producer lines carry no authority.
+const controllerIntakeStages = " session_bound session_rejected started_observed completed_fallback atomic_published prepare_started prepare_ready socket_listening socket_accepted assignment_wait assignment_unavailable assignment_ready helper_trusted packet_read packet_parsed packet_rejected helper_checked helper_started helper_start_failed helper_ready session_closed helper_exit exit "
+const helperIntakeStages = " helper_entry installation_ready call_parsed call_rejected scope_checked token_fields_present token_fields_absent token_present identity_check identity_ready provider_read provider_ok provider_rejected http_2xx http_4xx http_5xx http_unknown gate_published ready_sent helper_rejected "
+const workerIntakeStages = " bootstrap_started bootstrap_received bootstrap_child_started bootstrap_issued bootstrap_closed cli_checked cli_rejected fd_checked frame_read frame_parsed socket_connect socket_connected host_wait host_ready host_rejected worker_start worker_started worker_exit bridge_rejected session_closed runner_entry interposer_installed exit "
+
+// A segment identifies this controller process only, never a credential or a
+// persistent allocation identity. Sequence and elapsed share the output lock.
+var intakeRecords = struct {
+	sync.Mutex
+	segment  string
+	started  time.Time
+	sequence uint64
+}{segment: uuid.NewString(), started: time.Now()}
 
 func intakeEnabled() bool { return os.Getenv("CI_INTAKE_DIAGNOSTICS") == "1" }
-func safeIntakeStage(s string) bool {
-	return s != "" && !strings.ContainsAny(s, " \r\n\t") && strings.Contains(intakeStages, " "+s+" ")
+func safeSourceIntakeStage(source, stage string) bool {
+	if stage == "" || strings.ContainsAny(stage, " \r\n\t") {
+		return false
+	}
+	stages := ""
+	switch source {
+	case "controller":
+		stages = controllerIntakeStages
+	case "helper":
+		stages = helperIntakeStages
+	case "worker":
+		stages = workerIntakeStages
+	default:
+		return false
+	}
+	return strings.Contains(stages, " "+stage+" ")
 }
-func intakeEvent(job, source, stage string) {
-	if !intakeEnabled() || !safeIntakeStage(stage) || !serviceID.MatchString(job) || !oneOf(source, "controller", "helper", "worker") {
+func safeIntakeStage(stage string) bool {
+	return safeSourceIntakeStage("controller", stage) || safeSourceIntakeStage("helper", stage) || safeSourceIntakeStage("worker", stage)
+}
+func intakeRecord(job, source, stage string, code *int) {
+	if !intakeEnabled() || !serviceID.MatchString(job) || !safeSourceIntakeStage(source, stage) {
 		return
 	}
-	// The existing controller log survives job deletion; it remains bounded by the
-	// operator's current Docker log retention, not a new store or collection service.
-	log.Printf("ci-intake/v1 job=%s source=%s stage=%s", job, source, stage)
+	if code != nil && (stage != "exit" || *code < -1 || *code > 255) {
+		return
+	}
+	evidence := "forwarded"
+	if source == "controller" {
+		evidence = "observed"
+	}
+	intakeRecords.Lock()
+	defer intakeRecords.Unlock()
+	intakeRecords.sequence++
+	suffix := ""
+	if code != nil {
+		suffix = " code=" + strconv.Itoa(*code)
+	}
+	log.Printf("ci-intake/v2 job=%s source=%s stage=%s segment=%s seq=%d elapsed_ns=%d clock=controller evidence=%s%s", job, source, stage, intakeRecords.segment, intakeRecords.sequence, time.Since(intakeRecords.started).Nanoseconds(), evidence, suffix)
 }
+func intakeEvent(job, source, stage string) { intakeRecord(job, source, stage, nil) }
 
 // A bounded streaming stderr filter. Never buffer arbitrary helper stderr or
 // forward it. Validate the WHOLE line; prefixes with appended values are invalid.
@@ -50,7 +94,7 @@ func (w *intakeStderr) Write(p []byte) (int, error) {
 		if b == '\n' {
 			if !w.overflow && w.count < 64 && bytes.HasPrefix(w.line, []byte("ci-intake/v1 ")) {
 				stage := string(w.line[len("ci-intake/v1 "):])
-				if safeIntakeStage(stage) {
+				if safeSourceIntakeStage("helper", stage) {
 					intakeEvent(w.job, "helper", stage)
 					w.count++
 				}
@@ -73,13 +117,13 @@ func intakeEnvironment() []string {
 	return env
 }
 func intakeExit(job, source string, code int) {
-	if !intakeEnabled() || !serviceID.MatchString(job) || !oneOf(source, "controller", "worker") || code < -1 || code > 255 {
+	if !oneOf(source, "controller", "worker") {
 		return
 	}
-	log.Printf("ci-intake/v1 job=%s source=%s stage=exit code=%d", job, source, code)
+	intakeRecord(job, source, "exit", &code)
 }
 func safeIntakeLine(line string) (string, int, bool) {
-	if safeIntakeStage(line) {
+	if line != "exit" && safeSourceIntakeStage("worker", line) {
 		return line, 0, true
 	}
 	if value, ok := strings.CutPrefix(line, "worker_exit code="); ok {

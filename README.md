@@ -496,10 +496,20 @@ and is revoked on cancellation, disconnect, timeout or controller exit. This
 source change requires independent boundary review and explicit installation;
 v1 deployments retain their existing behavior.
 
+V2 validates the packet before waiting for the independent scheduler assignment.
+That wait shares the proxy's existing initial admission budget and observes
+disconnect/cancellation; assignment delay does not create a new token lifetime.
+
 The [Worker protocol and offline evidence guide](docs/worker-intake-protocol.md)
 fixes the upstream executable, admission/75 waiting contract, cancellation and
 exit behavior, and the limits of the real .NET transport probe.
 
 Optional intake stage diagnostics are described in
 [the intake diagnostics contract](docs/intake-diagnostics-v1.md). They are disabled
-by default and do not authorize or retry a job.
+by default and do not authorize or retry a job. Controller v2 records distinguish
+local scheduler/publication observations from forwarded v1 producer stages,
+with a separate process segment, sequence and controller clock.
+
+The v2 [allocation startup session binding](docs/intake-startup-binding.md) uses
+one-use material over existing Docker stdin and an inherited anonymous socket.
+It authenticates the trusted startup session; it does not authenticate a PID.
