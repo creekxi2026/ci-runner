@@ -232,7 +232,9 @@ func TestNativeWorkerProbeServer(t *testing.T) {
 		t.Skip("explicit offline .NET probe only")
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "assignment.json"), []byte(`{"fixture":true}`), 0444); err != nil {
+	// runIntake observes the allocation directory beside the socket. Publishing
+	// into the unrelated Go temp dir leaves the real Worker waiting forever.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(address), "assignment.json"), []byte(`{"fixture":true}`), 0444); err != nil {
 		t.Fatal(err)
 	}
 	command := filepath.Join(dir, "adapter.py")
