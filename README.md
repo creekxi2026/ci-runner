@@ -506,4 +506,6 @@ exit behavior, and the limits of the real .NET transport probe.
 
 Optional intake stage diagnostics are described in
 [the intake diagnostics contract](docs/intake-diagnostics-v1.md). They are disabled
-by default and do not authorize or retry a job.
+by default and do not authorize or retry a job. Controller v2 records distinguish
+local scheduler/publication observations from forwarded v1 producer stages,
+with a separate process segment, sequence and controller clock.

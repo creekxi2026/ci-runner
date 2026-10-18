@@ -315,7 +315,7 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 				return err
 			}
 		}
-		if err := f.assignJobInputs(event); err != nil {
+		if err := f.observeInputAssignment(event, false); err != nil {
 			return err
 		}
 		f.changed()
@@ -329,7 +329,7 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 			return err
 		}
 		assigned := &scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase}
-		if err := f.assignJobInputs(assigned); err != nil {
+		if err := f.observeInputAssignment(assigned, true); err != nil {
 			return err
 		}
 		f.changed()

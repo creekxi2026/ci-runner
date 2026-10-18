@@ -33,11 +33,12 @@ type inputPolicy struct {
 	Mounts  []inputMount `json:"mounts"`
 }
 type jobInputs struct {
-	policy  inputPolicy
-	root    *os.Root
-	base    string
-	uid     uint32
-	intakes intakeState
+	policy        inputPolicy
+	root          *os.Root
+	base          string
+	uid           uint32
+	intakes       intakeState
+	syncDirectory func(string) error
 }
 
 func trustedInputFile(path string) ([]byte, error) {
@@ -154,7 +155,18 @@ func (b *jobInputs) write(name string, value any, immutable bool) error {
 	if e = b.root.Rename(tmp, name); e != nil {
 		return e
 	}
-	return syncCleanupDirectory(b.root, filepath.Dir(name))
+	if b.syncDirectory != nil {
+		e = b.syncDirectory(filepath.Dir(name))
+	} else {
+		e = syncCleanupDirectory(b.root, filepath.Dir(name))
+	}
+	if e != nil {
+		return e
+	}
+	if filepath.Base(name) == "assignment.json" && filepath.Dir(filepath.Dir(name)) == "." {
+		intakeEvent(filepath.Dir(name), "controller", "atomic_published")
+	}
+	return nil
 }
 func (b *jobInputs) invoke(ctx context.Context, operation, name string) int {
 	// Children receive no stdout channel for tokens/spec/JIT; the exit code is
@@ -189,10 +201,10 @@ func (b *jobInputs) invoke(ctx context.Context, operation, name string) int {
 }
 func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) error {
 	b := f.inputs
-	intakeEvent(name, "controller", "prepare_started")
 	if b == nil {
 		return nil
 	}
+	intakeEvent(name, "controller", "prepare_started")
 	entries, e := b.entries()
 	if e != nil {
 		return e
@@ -241,6 +253,60 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 	intakeEvent(name, "controller", "prepare_ready")
 	return b.startIntake(ctx, name)
 }
+
+// Serialize the producer facts and assignment publication with allocation
+// cleanup. An old spec or a nil-returning scheduler observer is not association.
+func (f *fleet) observeInputAssignment(event *scaleset.JobStarted, fallback bool) error {
+	if f.inputs == nil || event == nil {
+		return nil
+	}
+	j := f.state(event.RunnerName)
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.cleaning {
+		return nil
+	}
+	b := f.inputs
+	value, err := inputAssignment(event)
+	if err != nil {
+		return err
+	}
+	if _, err = b.root.Stat(event.RunnerName + "/spec.json"); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	data, _ := json.Marshal(value)
+	old, err := b.root.ReadFile(event.RunnerName + "/assignment.json")
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
+		return err
+	}
+	if !missing && !bytes.Equal(old, data) {
+		return fmt.Errorf("sealed input changed")
+	}
+	if fallback {
+		if !missing {
+			return nil
+		}
+		intakeEvent(event.RunnerName, "controller", "completed_fallback")
+	} else {
+		intakeEvent(event.RunnerName, "controller", "started_observed")
+	}
+	return b.write(event.RunnerName+"/assignment.json", value, true)
+}
+func inputAssignment(event *scaleset.JobStarted) (obj, error) {
+	if !strings.HasPrefix(event.RunnerName, "ci-job-") || filepath.Base(event.RunnerName) != event.RunnerName || !serviceID.MatchString(event.RunnerName) {
+		return nil, fmt.Errorf("invalid input runner")
+	}
+	if event.RunnerID <= 0 || event.WorkflowRunID <= 0 || !cacheRepo.MatchString(event.OwnerName+"/"+event.RepositoryName) {
+		return nil, fmt.Errorf("invalid input assignment")
+	}
+	return obj{"schema": "ci-job-assignment/v1", "runner_name": event.RunnerName, "runner_id": event.RunnerID, "repository": event.OwnerName + "/" + event.RepositoryName, "run_id": event.WorkflowRunID, "scheduler_job_id": event.JobID, "event": event.EventName}, nil
+}
 func (f *fleet) assignJobInputs(event *scaleset.JobStarted) error {
 	if f.inputs == nil || event == nil {
 		return nil
@@ -254,10 +320,11 @@ func (f *fleet) assignJobInputs(event *scaleset.JobStarted) error {
 	} else if e != nil {
 		return e
 	}
-	if event.RunnerID <= 0 || event.WorkflowRunID <= 0 || !cacheRepo.MatchString(event.OwnerName+"/"+event.RepositoryName) {
-		return fmt.Errorf("invalid input assignment")
+	value, e := inputAssignment(event)
+	if e != nil {
+		return e
 	}
-	return b.write(event.RunnerName+"/assignment.json", obj{"schema": "ci-job-assignment/v1", "runner_name": event.RunnerName, "runner_id": event.RunnerID, "repository": event.OwnerName + "/" + event.RepositoryName, "run_id": event.WorkflowRunID, "scheduler_job_id": event.JobID, "event": event.EventName}, true)
+	return b.write(event.RunnerName+"/assignment.json", value, true)
 }
 func (b *jobInputs) reconcile(ctx context.Context, active ...map[string]string) {
 	if b.policy.Schema == "ci-job-inputs/v2" {

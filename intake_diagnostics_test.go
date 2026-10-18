@@ -82,7 +82,7 @@ func TestHelperDiagnosticFilterBoundsAndRejectsRawStderr(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		w.Write([]byte("ci-intake/v1 provider_read\n"))
 	}
-	if strings.Contains(out.String(), "SENTINEL_PRIVATE") || !strings.Contains(out.String(), "helper_entry") || strings.Count(out.String(), "ci-intake/v1") != 64 {
+	if strings.Contains(out.String(), "SENTINEL_PRIVATE") || !strings.Contains(out.String(), "helper_entry") || strings.Count(out.String(), "ci-intake/v2") != 64 {
 		t.Fatal("unsafe/unbounded helper diagnostics")
 	}
 }
