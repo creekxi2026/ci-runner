@@ -71,7 +71,8 @@ controller `atomic_published` or worker `frame_parsed`; worker stderr cannot emi
 helper `provider_ok`. `token_present` describes field shape, not provider approval.
 
 Helper stderr retains its streaming 96-byte line bound and 64-record cap; raw
-stderr is discarded. Worker emits at most 32 records. Cleanup reads Docker stderr
+stderr is discarded. Each worker-side producer emits at most 32 records; the existing collector cap
+also bounds the combined startup/bridge stream. Cleanup reads Docker stderr
 tail 128 through the existing socket before deletion: one second, 64KiB total,
 8KiB framing, at most 64 accepted lines. Invalid framing and collector failure are
 best effort and cannot block normal rejection/cleanup. Native JobDispatcher may
@@ -85,3 +86,9 @@ The current project helper emits v1 only; no project parser uses these records t
 write trusted state. Project provider checks, helper gate-before-ready and native
 release receipts remain separate. See [Worker protocol](worker-intake-protocol.md)
 for the actual one-shot intake and cancellation contract.
+
+`session_bound` / `session_rejected` are controller observations of the separate
+startup capability handshake. Worker `bootstrap_started`, `bootstrap_received`,
+`bootstrap_child_started`, `bootstrap_issued` and `bootstrap_closed` are bounded
+forwarded observations, with no material or credential digest. Neither source
+proves an exact OS process identity.

@@ -509,3 +509,7 @@ Optional intake stage diagnostics are described in
 by default and do not authorize or retry a job. Controller v2 records distinguish
 local scheduler/publication observations from forwarded v1 producer stages,
 with a separate process segment, sequence and controller clock.
+
+The v2 [allocation startup session binding](docs/intake-startup-binding.md) uses
+one-use material over existing Docker stdin and an inherited anonymous socket.
+It authenticates the trusted startup session; it does not authenticate a PID.

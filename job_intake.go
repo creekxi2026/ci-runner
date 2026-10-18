@@ -50,9 +50,10 @@ func waitIntakeAssignment(ctx context.Context, directory string) bool {
 }
 
 type intakeState struct {
-	mu   sync.Mutex
-	jobs map[string]context.CancelFunc
-	wg   sync.WaitGroup
+	mu       sync.Mutex
+	jobs     map[string]context.CancelFunc
+	material map[string]*intakeMaterial
+	wg       sync.WaitGroup
 }
 
 // Allocation messages are opaque upstream JSON, including Unicode job names
@@ -261,10 +262,32 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	b.intakes.jobs[name] = cancel
+	material, e := newIntakeMaterial()
+	if e != nil {
+		cancel()
+		listener.Close()
+		os.Remove(address)
+		return e
+	}
+	if b.intakes.material == nil {
+		b.intakes.material = map[string]*intakeMaterial{}
+	}
+	b.intakes.material[name] = material
+	expiry := time.AfterFunc(time.Until(material.expires), func() {
+		b.intakes.mu.Lock()
+		defer b.intakes.mu.Unlock()
+		if m := b.intakes.material[name]; m != nil {
+			m.clear()
+			delete(b.intakes.material, name)
+			cancel()
+		}
+	})
 	intakeEvent(name, "controller", "socket_listening")
 	b.intakes.wg.Add(1)
 	go func() {
 		defer b.intakes.wg.Done()
+		defer expiry.Stop()
+		defer b.eraseBootstrap(name)
 		defer cancel()
 		defer listener.Close()
 		defer os.Remove(address)
@@ -285,6 +308,11 @@ func (b *jobInputs) startIntake(_ context.Context, name string) error {
 		intakeEvent(name, "controller", "socket_accepted")
 		listener.Close()
 		os.Remove(address) // one successful accept, for this job only
+		if !b.bindIntake(ctx, name, conn) {
+			intakeEvent(name, "controller", "session_rejected")
+			return
+		}
+		intakeEvent(name, "controller", "session_bound")
 		if _, e = trustedInputFile(b.policy.Command[0]); e != nil {
 			return
 		}
@@ -300,6 +328,10 @@ func (b *jobInputs) cancelIntake(name string) {
 	}
 	b.intakes.mu.Lock()
 	defer b.intakes.mu.Unlock()
+	if m := b.intakes.material[name]; m != nil {
+		m.clear()
+		delete(b.intakes.material, name)
+	}
 	if cancel := b.intakes.jobs[name]; cancel != nil {
 		cancel()
 		delete(b.intakes.jobs, name)
@@ -309,6 +341,10 @@ func (b *jobInputs) cancelIntake(name string) {
 func (b *jobInputs) closeIntakes() {
 	b.intakes.mu.Lock()
 	for name, cancel := range b.intakes.jobs {
+		if m := b.intakes.material[name]; m != nil {
+			m.clear()
+			delete(b.intakes.material, name)
+		}
 		cancel()
 		delete(b.intakes.jobs, name)
 	}

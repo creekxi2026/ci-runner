@@ -138,11 +138,17 @@ case "$call" in *ci-job-input-call/v1*) exit 0;; *) printf 0; sleep 30;; esac`)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
+	material, err := b.takeBootstrap(name)
+	if err != nil {
+		t.Fatal("fixture bootstrap unavailable")
+	}
+	defer clear(material)
 	conn, err := net.DialTimeout("unix", fmt.Sprintf("/proc/self/fd/%d/session.sock", d.Fd()), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
+	testAuthenticateIntake(t, conn, material)
 	return f, b, name, conn
 }
 

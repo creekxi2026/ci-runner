@@ -197,12 +197,18 @@ case "$call" in *ci-job-input-call/v1*) exit 0;; *) printf 0; sleep 30;; esac`)
 		t.Fatal(err)
 	}
 	defer socketDir.Close()
+	material, err := b.takeBootstrap(name)
+	if err != nil {
+		t.Fatal("fixture bootstrap unavailable")
+	}
+	defer clear(material)
 	conn, err := net.DialTimeout("unix", fmt.Sprintf("/proc/self/fd/%d/session.sock", socketDir.Fd()), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	testAuthenticateIntake(t, conn, material)
 	if err = json.NewEncoder(conn).Encode(obj{"schema": "ci-job-intake/v1", "message": obj{"jobId": "opaque"}}); err != nil {
 		t.Fatal(err)
 	}

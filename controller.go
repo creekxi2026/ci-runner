@@ -239,8 +239,21 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	if err = dockerContext(ctx, "POST", "/containers/create?name="+name, spec, nil); err != nil {
 		return err
 	}
+	bootstrap, attachErr := f.attachBootstrap(ctx, name)
+	if attachErr != nil {
+		return attachErr
+	}
+	if bootstrap != nil {
+		defer bootstrap.Close()
+	}
 	if err = dockerContext(ctx, "POST", "/containers/"+name+"/start", nil, nil); err != nil {
 		return
+	}
+	if bootstrap != nil {
+		if err = f.inputs.sendBootstrap(name, bootstrap); err != nil {
+			return err
+		}
+		bootstrap.Close()
 	}
 	fw := secure()
 	fw["CapAdd"] = []string{"NET_ADMIN"}

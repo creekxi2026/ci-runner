@@ -240,6 +240,7 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 	spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INPUTS=1")
 	if b.policy.Schema == "ci-job-inputs/v2" {
 		spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INTAKE=1")
+		spec["OpenStdin"], spec["AttachStdin"], spec["StdinOnce"] = true, true, true
 		if intakeEnabled() {
 			spec["Env"] = append(spec["Env"].([]string), "CI_INTAKE_DIAGNOSTICS=1")
 		}

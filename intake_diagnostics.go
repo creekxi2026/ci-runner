@@ -21,9 +21,9 @@ import (
 )
 
 // Source/stage pairs are disjoint. Legacy producer lines carry no authority.
-const controllerIntakeStages = " started_observed completed_fallback atomic_published prepare_started prepare_ready socket_listening socket_accepted assignment_wait assignment_unavailable assignment_ready helper_trusted packet_read packet_parsed packet_rejected helper_checked helper_started helper_start_failed helper_ready session_closed helper_exit exit "
+const controllerIntakeStages = " session_bound session_rejected started_observed completed_fallback atomic_published prepare_started prepare_ready socket_listening socket_accepted assignment_wait assignment_unavailable assignment_ready helper_trusted packet_read packet_parsed packet_rejected helper_checked helper_started helper_start_failed helper_ready session_closed helper_exit exit "
 const helperIntakeStages = " helper_entry installation_ready call_parsed call_rejected scope_checked token_fields_present token_fields_absent token_present identity_check identity_ready provider_read provider_ok provider_rejected http_2xx http_4xx http_5xx http_unknown gate_published ready_sent helper_rejected "
-const workerIntakeStages = " cli_checked cli_rejected fd_checked frame_read frame_parsed socket_connect socket_connected host_wait host_ready host_rejected worker_start worker_started worker_exit bridge_rejected session_closed runner_entry interposer_installed exit "
+const workerIntakeStages = " bootstrap_started bootstrap_received bootstrap_child_started bootstrap_issued bootstrap_closed cli_checked cli_rejected fd_checked frame_read frame_parsed socket_connect socket_connected host_wait host_ready host_rejected worker_start worker_started worker_exit bridge_rejected session_closed runner_entry interposer_installed exit "
 
 // A segment identifies this controller process only, never a credential or a
 // persistent allocation identity. Sequence and elapsed share the output lock.

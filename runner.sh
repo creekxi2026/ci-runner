@@ -1,5 +1,10 @@
 #!/bin/sh
 set -eu
+# Material enters only through the controller-owned Docker stdin stream. The
+# transient private broker passes a socketpair capability through real Listener.
+if [ "${CI_JOB_INTAKE:-}" = 1 ] && [ -z "${CI_INTAKE_BOOTSTRAP_FD:-}" ]; then
+ exec /usr/bin/python3 /opt/ci/worker_intake.py bootstrap
+fi
 if [ "${CI_INTAKE_DIAGNOSTICS:-}" = 1 ]; then
  /usr/bin/python3 -I -c 'import os,select
 try:

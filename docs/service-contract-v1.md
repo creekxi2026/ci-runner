@@ -394,3 +394,7 @@ interruptible. Worker group cleanup includes descendants after leader exit.
 Optional pre-Worker stage observations follow
 [intake diagnostics (v2 records / v1 producer wire)](intake-diagnostics-v1.md); they grant no service authority
 and preserve the one-use intake and ready protocol.
+
+V2 job intake requires [allocation startup session binding](intake-startup-binding.md)
+before the unchanged helper/provider gate. This is a one-use existing-channel
+capability, separate from diagnostic observations and OS process identity.

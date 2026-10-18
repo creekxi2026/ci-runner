@@ -122,3 +122,7 @@ an authorized real platform run. Native successful/failed/cancelled job status,
 server result publication and exact installed project adapters remain separate
 integration/onsite evidence. No echo Worker or skipped workflow substitutes for
 those results.
+
+Before this v1 envelope is sent, production v2 startup requires the one-use
+[allocation binding handshake](intake-startup-binding.md). Direct bridge fixture
+calls do not represent a production admission entry.
