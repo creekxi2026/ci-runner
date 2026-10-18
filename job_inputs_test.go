@@ -153,6 +153,9 @@ func TestInputFactoryIsTheSingleRunnerCreateBoundary(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&spec)
 			if command, ok := spec["Cmd"].([]any); ok && len(command) > 0 && command[0] == "/opt/ci/runner.sh" {
 				creates++
+				if spec["HostConfig"].(map[string]any)["Init"] != true {
+					t.Error("input admission must preserve worker orphan reaping")
+				}
 				mounts := spec["HostConfig"].(map[string]any)["Mounts"].([]any)
 				found := false
 				for _, v := range mounts {

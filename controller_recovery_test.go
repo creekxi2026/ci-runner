@@ -180,6 +180,9 @@ func TestProvisioningPayloadAndRedeliveryHardMax(t *testing.T) {
 			networks[name] = v.HostConfig["NetworkMode"].(string)
 			created++
 			if name == jobName(name) {
+				if v.HostConfig["Init"] != true {
+					t.Error("worker needs an init to reap orphaned job descendants after cancellation")
+				}
 				if v.HostConfig["ReadonlyRootfs"] != true {
 					t.Error("runner root filesystem is unbounded writable storage")
 				}
