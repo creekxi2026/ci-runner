@@ -1,5 +1,9 @@
 # Generic job services v1
 
+The opt-in v2 [private input contract](private-inputs.md) adds operator-owned
+persistent resource mounts to separately authenticated dispatch pools. It does
+not change the service v1 envelope or enable mounts for ordinary PR workers.
+
 The optional [controller cleanup journal](cleanup-observations.md) retains
 infrastructure observations after job deletion. It does not extend this adapter
 ABI with teardown or implement a project terminal receipt. Missing project

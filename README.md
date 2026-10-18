@@ -474,6 +474,12 @@ terminal schema and host collector; ordinary worker APIs remain unchanged.
 
 ## Optional trusted project inputs
 
+Separately authenticated dispatch pools may declare persistent resource subpaths
+through the optional [private input contract](docs/private-inputs.md). These
+resources are present in trusted Listener containers before assignment; the v2
+helper must authenticate the provider before allowing any Worker code. Do not
+enable this extension on a mixed PR pool. It is disabled by default.
+
 `JOB_INPUT_POLICY_FILE` enables the generic `ci-job-inputs/v1` controller adapter
 contract described in [the service contract](docs/service-contract-v1.md#trusted-job-inputs).
 The default is disabled. The controller seals the actual runner spec and later

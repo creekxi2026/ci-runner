@@ -27,10 +27,11 @@ type inputMount struct {
 	Target string `json:"target"`
 }
 type inputPolicy struct {
-	Schema  string       `json:"schema"`
-	Command []string     `json:"command"`
-	Digest  string       `json:"sha256"`
-	Mounts  []inputMount `json:"mounts"`
+	Schema        string              `json:"schema"`
+	Command       []string            `json:"command"`
+	Digest        string              `json:"sha256"`
+	Mounts        []inputMount        `json:"mounts"`
+	PrivateMounts []privateInputMount `json:"private_mounts,omitempty"`
 }
 type jobInputs struct {
 	policy        inputPolicy
@@ -92,6 +93,9 @@ func (f *fleet) openJobInputs(path string) error {
 		}
 		seen[m.Target] = true
 		seen[m.Name] = true
+	}
+	if err := f.validatePrivateInputs(p); err != nil {
+		return err
 	}
 	base := "inputs-v1/" + f.owner
 	for _, dir := range []string{"inputs-v1", base} {
@@ -237,6 +241,9 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 		mounts = append(mounts, obj{"Type": "volume", "Source": f.work.volume, "Target": m.Target, "ReadOnly": true, "VolumeOptions": obj{"Subpath": b.base + "/" + name + "/" + m.Name}})
 	}
 	host["Mounts"] = mounts
+	if err := f.mountPrivateInputs(host, b.policy); err != nil {
+		return err
+	}
 	spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INPUTS=1")
 	if b.policy.Schema == "ci-job-inputs/v2" {
 		spec["Env"] = append(spec["Env"].([]string), "CI_JOB_INTAKE=1")
