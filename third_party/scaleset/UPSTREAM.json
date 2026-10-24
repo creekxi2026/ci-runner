@@ -67,7 +67,7 @@
       "upstream_sha256": "7551f1f6a1311bea0a915889ee4c7c2433cd609c36f76bc24215109119fb694e"
     },
     "diagnostic.go": {
-      "local_sha256": "0340393bfd441c0727c574ec5b0e61fd7bb428a6c7445b4521f1707c06fa31a9",
+      "local_sha256": "0a817ef8cbf3d8d6671b47dc199bad956a39ea2595a10d64c02b7da4472348a1",
       "upstream_sha256": null
     },
     "diagnostic_concurrency_test.go": {
@@ -80,6 +80,14 @@
     },
     "diagnostic_integration_test.go": {
       "local_sha256": "f83c0d5ea79fb32462059b9cd85f8a15223ea75c7535922a7813d808810c5402",
+      "upstream_sha256": null
+    },
+    "diagnostic_local.go": {
+      "local_sha256": "2f0b6e5a7f775022cf92615e16783b56dcdfc52daf33a278bca7bd5627e88d16",
+      "upstream_sha256": null
+    },
+    "diagnostic_local_test.go": {
+      "local_sha256": "3b78442c5b398c26df5f7979e2379d6c9b1abe080a29b4179d76410409076a7d",
       "upstream_sha256": null
     },
     "diagnostic_test.go": {
