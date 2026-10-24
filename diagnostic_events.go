@@ -29,7 +29,9 @@ func openDiagnostics(path string, output io.Writer) *scaleset.Diagnostics {
 		owner = uint32(n)
 	}
 	read := func(name string, max int64) ([]byte, bool) {
-		fd, err := syscall.Open(name, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		// O_NONBLOCK lets fstat reject FIFOs without waiting for a writer.
+		// Validate the opened descriptor, never a separate path-based stat.
+		fd, err := syscall.Open(name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return nil, false
 		}

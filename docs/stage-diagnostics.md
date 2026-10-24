@@ -57,3 +57,10 @@ is a scheduler choice, so that test compares multisets plus exact endpoint
 counts; the serial SDK test preserves its ordered trace comparison. All secrets
 in test traces are explicit fixture baits, never real credentials. Diagnostic
 output is separately checked for those baits and raw session identity.
+
+Diagnostic profile and salt inputs use nonblocking, nofollow opens and validate
+the opened descriptor's regular-file type, owner, link count, mode and size.
+A FIFO without a writer disables diagnostics immediately, so a bad optional
+input cannot strand the controller before its normal configuration checks.
+`TestDiagnosticInputTypesBounded` exercises both inputs in bounded child
+processes, including FIFO, directory, symlink, hardlink, mode and size rejection.
