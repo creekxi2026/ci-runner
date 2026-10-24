@@ -102,3 +102,44 @@ func TestDiagnosticCancelledStartEquivalence(t *testing.T) {
 		closeDiagnostics(d)
 	}
 }
+
+func TestDiagnosticBootstrapDemandRetryEquivalence(t *testing.T) {
+	type result struct {
+		Demand, Gets, Acks, Acquired, Pending int
+		Canceled                              bool
+	}
+	run := func(on bool) (result, []byte) {
+		var output bytes.Buffer
+		var d *scaleset.Diagnostics
+		if on {
+			d = diagnosticFixture(t, &output)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		s := &fakeSession{cancel: cancel, msg: &scaleset.RunnerScaleSetMessage{MessageID: 8}}
+		calls := 0
+		f := &fleet{diagnostics: d, session: s, jobs: map[string]string{}, demandSource: func(context.Context) (int, error) {
+			calls++
+			if calls == 1 {
+				return 0, errors.New("SECRET-demand")
+			}
+			return 0, nil
+		}}
+		err := f.listen(ctx, time.Millisecond)
+		closeDiagnostics(d)
+		return result{calls, s.gets, s.acks, s.acquired, len(f.messages), errors.Is(err, context.Canceled)}, output.Bytes()
+	}
+	a, _ := run(false)
+	b, events := run(true)
+	if !reflect.DeepEqual(a, b) || a.Demand < 2 || !a.Canceled {
+		t.Fatalf("bootstrap/demand retry drift: %+v %+v", a, b)
+	}
+	for _, stage := range []string{"bootstrap", "demand", "reconcile", "poll", "ack"} {
+		if !bytes.Contains(events, []byte(`"stage":"`+stage+`"`)) {
+			t.Fatal("missing stage", stage)
+		}
+	}
+	if bytes.Contains(events, []byte("SECRET")) {
+		t.Fatal("demand secret reached sink")
+	}
+}

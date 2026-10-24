@@ -35,7 +35,25 @@ Image preflight verifies the local source closure before Docker builds.
 
 This candidate does not authorize image publication, deployment or an observer
 window. Existing matching controller/runner revision enforcement remains intact.
-A new diagnostic controller cannot be combined with an old worker revision under
-that contract. Consuming projects also retain their exact installed lane image
-contracts; an operator overlay cannot override them without a separately reviewed
-new source/input contract.
+A new diagnostic controller requires a worker built from the same revision.
+An isolated observer candidate can declare a new pair through the consuming
+project's existing config and overlay contracts; this does not change ordinary
+controllers, old installations or their evidence. Runtime labels and actual
+digests still require the normal build and image checks. Immutable installation
+directories also need an accepted, unused executor version; never overwrite an
+old directory or manufacture an empty commit to change its name.
+
+`TestDiagnosticStartResourceTraceMatrix` compares the real provisioning and
+cleanup calls with diagnostics disabled, enabled and with failed, short, panicking
+or blocked writers. It covers reserve/capacity, network, proxy, JIT, disk, worker,
+firewall, final release, cancellation and deadline paths. The finite transport
+creates no Docker resources. `TestDiagnosticBootstrapDemandRetryEquivalence`
+compares the bootstrap/demand retry, polling and acknowledgement path.
+
+The nested module's `TestDiagnosticRefreshConcurrencyMatrix` starts twelve
+callers together, verifies auth cache/refresh and session duplicate-refresh
+counts, and compares requests and return/error chains. Concurrent request order
+is a scheduler choice, so that test compares multisets plus exact endpoint
+counts; the serial SDK test preserves its ordered trace comparison. All secrets
+in test traces are explicit fixture baits, never real credentials. Diagnostic
+output is separately checked for those baits and raw session identity.

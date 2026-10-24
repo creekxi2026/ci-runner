@@ -70,6 +70,10 @@
       "local_sha256": "0340393bfd441c0727c574ec5b0e61fd7bb428a6c7445b4521f1707c06fa31a9",
       "upstream_sha256": null
     },
+    "diagnostic_concurrency_test.go": {
+      "local_sha256": "23ae16e43ae01778286b2d783bf1bb545182e5d418e54124e3cf87966a29ba38",
+      "upstream_sha256": null
+    },
     "diagnostic_http.go": {
       "local_sha256": "3ec78231a5ddc21f26d34f7cea2bd3189d50be54fe0d56de08adf51a32a5ce85",
       "upstream_sha256": null
