@@ -70,7 +70,8 @@ type DiagnosticCounts struct {
 	Dropped  uint64 `json:"dropped"`
 }
 type DiagnosticEvent struct {
-	Schema string `json:"schema"`
+	Schema string                `json:"schema"`
+	Local  *DiagnosticScaleLocal `json:"local,omitempty"`
 	DiagnosticIdentity
 	Seq            uint64           `json:"seq"`
 	OpID           uint64           `json:"op_id"`
@@ -113,6 +114,7 @@ type diagnosticCall struct {
 	httpOpen atomic.Bool
 	status   atomic.Int64
 	session  *string
+	local    *DiagnosticScaleLocal
 }
 
 var diagID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
@@ -266,6 +268,7 @@ func (d *Diagnostics) Begin(ctx context.Context, stage DiagnosticStage, attempt 
 		ms := time.Since(c.started).Milliseconds()
 		e := c.event("end", outcome, class, nil, nil)
 		e.DurationMS = &ms
+		e.Local = c.local
 		if s := int(c.status.Load()); s >= 100 && s <= 599 {
 			e.HTTPStatus = &s
 		}

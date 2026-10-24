@@ -524,6 +524,6 @@ one-use material over existing Docker stdin and an inherited anonymous socket.
 It authenticates the trusted startup session; it does not authenticate a PID.
 
 Optional typed controller/SDK stage evidence is described in
-[stage diagnostics](docs/stage-diagnostics.md), including the opt-in private
+[stage diagnostics](docs/stage-diagnostics.md) and [local Scale return classifications](docs/scale-local-diagnostics.md), including the opt-in private
 profile, bounded sink, local SDK patch provenance and evidence limits; it does
 not relax matching image revisions or authorize an observer window.
