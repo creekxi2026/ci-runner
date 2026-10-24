@@ -6,3 +6,6 @@
 __pycache__
 tests
 *.md
+!third_party/scaleset/LOCAL_PATCH.md
+!third_party/scaleset/UPSTREAM.json
+!third_party/scaleset/**
