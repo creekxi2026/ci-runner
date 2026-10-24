@@ -64,3 +64,8 @@ A FIFO without a writer disables diagnostics immediately, so a bad optional
 input cannot strand the controller before its normal configuration checks.
 `TestDiagnosticInputTypesBounded` exercises both inputs in bounded child
 processes, including FIFO, directory, symlink, hardlink, mode and size rejection.
+
+Group 33 adds a closed local-return classification on the owning inner Scale
+end and a paired offline archive reader; see [return points, null semantics and
+consumer binding](scale-local-diagnostics.md). Existing retry parents retain
+only propagation. This additive observation does not establish business identity.

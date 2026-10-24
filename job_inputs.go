@@ -265,10 +265,16 @@ func (f *fleet) prepareJobInputs(ctx context.Context, name string, spec obj) err
 // Serialize the producer facts and assignment publication with allocation
 // cleanup. An old spec or a nil-returning scheduler observer is not association.
 func (f *fleet) observeInputAssignment(event *scaleset.JobStarted, fallback bool) error {
+	return f.observeInputAssignmentObserved(event, fallback, nil)
+}
+func (f *fleet) observeInputAssignmentObserved(event *scaleset.JobStarted, fallback bool, o *scaleObservation) error {
 	if f.inputs == nil || event == nil {
 		return nil
 	}
 	j := f.state(event.RunnerName)
+	if o != nil {
+		o.StateExists = boolValue(j != nil)
+	}
 	if j == nil {
 		return nil
 	}
@@ -278,22 +284,25 @@ func (f *fleet) observeInputAssignment(event *scaleset.JobStarted, fallback bool
 		return nil
 	}
 	b := f.inputs
-	value, err := inputAssignment(event)
+	value, err := inputAssignmentObserved(event, o)
 	if err != nil {
 		return err
 	}
 	if _, err = b.root.Stat(event.RunnerName + "/spec.json"); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
+		o.fail("input_assignment", "input_spec_stat_failed")
 		return err
 	}
 	data, _ := json.Marshal(value)
 	old, err := b.root.ReadFile(event.RunnerName + "/assignment.json")
 	missing := errors.Is(err, os.ErrNotExist)
 	if err != nil && !missing {
+		o.fail("input_assignment", "input_assignment_read_failed")
 		return err
 	}
 	if !missing && !bytes.Equal(old, data) {
+		o.fail("input_assignment", "sealed_input_changed")
 		return fmt.Errorf("sealed input changed")
 	}
 	if fallback {
@@ -304,13 +313,26 @@ func (f *fleet) observeInputAssignment(event *scaleset.JobStarted, fallback bool
 	} else {
 		intakeEvent(event.RunnerName, "controller", "started_observed")
 	}
-	return b.write(event.RunnerName+"/assignment.json", value, true)
+	err = b.write(event.RunnerName+"/assignment.json", value, true)
+	if err != nil {
+		o.fail("input_assignment", "input_assignment_write_failed")
+	}
+	return err
 }
 func inputAssignment(event *scaleset.JobStarted) (obj, error) {
-	if !strings.HasPrefix(event.RunnerName, "ci-job-") || filepath.Base(event.RunnerName) != event.RunnerName || !serviceID.MatchString(event.RunnerName) {
+	return inputAssignmentObserved(event, nil)
+}
+func inputAssignmentObserved(event *scaleset.JobStarted, o *scaleObservation) (obj, error) {
+	valid := strings.HasPrefix(event.RunnerName, "ci-job-") && filepath.Base(event.RunnerName) == event.RunnerName && serviceID.MatchString(event.RunnerName)
+	if o != nil {
+		o.NameValid = boolValue(valid)
+	}
+	if !valid {
+		o.fail("input_assignment", "invalid_input_runner")
 		return nil, fmt.Errorf("invalid input runner")
 	}
 	if event.RunnerID <= 0 || event.WorkflowRunID <= 0 || !cacheRepo.MatchString(event.OwnerName+"/"+event.RepositoryName) {
+		o.fail("input_assignment", "invalid_input_assignment")
 		return nil, fmt.Errorf("invalid input assignment")
 	}
 	return obj{"schema": "ci-job-assignment/v1", "runner_name": event.RunnerName, "runner_id": event.RunnerID, "repository": event.OwnerName + "/" + event.RepositoryName, "run_id": event.WorkflowRunID, "scheduler_job_id": event.JobID, "event": event.EventName}, nil

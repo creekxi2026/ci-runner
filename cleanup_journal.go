@@ -94,28 +94,62 @@ func openCleanupJournal(work *sharedWork, uid uint32) (*cleanupJournal, error) {
 	return &cleanupJournal{root: r, owner: work.owner, uid: uid, syncDir: func() error { return syncCleanupDirectory(r, ".") }}, nil
 }
 
-func (c *cleanupJournal) read(n string) (cleanupObservation, error) {
+func (c *cleanupJournal) read(n string) (cleanupObservation, error) { return c.readObserved(n, nil) }
+func (c *cleanupJournal) readObserved(n string, o *scaleObservation) (cleanupObservation, error) {
 	v := cleanupObservation{}
-	if !validJobName.MatchString(n) {
+	if o != nil {
+		o.JournalExists, o.JournalSafe = nil, nil
+	}
+	valid := validJobName.MatchString(n)
+	if o != nil {
+		o.NameValid = boolValue(valid)
+	}
+	if !valid {
+		o.fail("cleanup_journal", "invalid_cleanup_identity")
 		return v, fmt.Errorf("invalid cleanup identity")
 	}
 	f, e := c.root.OpenFile(n+".json", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if e != nil {
+		if o != nil && errors.Is(e, os.ErrNotExist) {
+			o.JournalExists = boolValue(false)
+		}
+		o.fail("cleanup_journal", "cleanup_open_failed")
 		return v, e
+	}
+	if o != nil {
+		o.JournalExists = boolValue(true)
 	}
 	defer f.Close()
 	st, e := f.Stat()
 	if e != nil || !protectedCleanup(st, c.uid, 0444, false) || st.Size() < 1 || st.Size() > 65536 {
+		if o != nil && e == nil {
+			o.JournalSafe = boolValue(false)
+		}
+		o.fail("cleanup_journal", "unsafe_cleanup_record")
 		return v, fmt.Errorf("unsafe cleanup record")
 	}
-	b, e := io.ReadAll(io.LimitReader(f, 65537))
+	if o != nil {
+		o.JournalSafe = boolValue(true)
+	}
+	return c.decodeRecord(n, f, o)
+}
+
+// The stream is the already opened, validated descriptor. Keeping the bounded
+// decode separate permits deterministic growth/read-fault tests without racing
+// real filesystem mutations or adding a business-path read.
+func (c *cleanupJournal) decodeRecord(n string, r io.Reader, o *scaleObservation) (cleanupObservation, error) {
+	v := cleanupObservation{}
+	b, e := io.ReadAll(io.LimitReader(r, 65537))
 	if e != nil || len(b) > 65536 {
+		o.fail("cleanup_journal", "invalid_cleanup_record_size")
 		return v, fmt.Errorf("invalid cleanup record size")
 	}
 	if e = strictServiceDecode(b, &v); e != nil {
+		o.fail("cleanup_journal", "invalid_cleanup_record")
 		return v, fmt.Errorf("invalid cleanup record")
 	}
 	if v.Schema != cleanupSchema || v.Owner != c.owner || v.Job != n {
+		o.fail("cleanup_journal", "foreign_cleanup_record")
 		return v, fmt.Errorf("foreign cleanup record")
 	}
 	return v, nil
@@ -125,15 +159,25 @@ func (c *cleanupJournal) read(n string) (cleanupObservation, error) {
 // other controllers. In-process writers serialize updates. fsync the file and
 // directory before acknowledging a scheduler event or deleting its inputs.
 func (c *cleanupJournal) update(n string, change func(*cleanupObservation) error) error {
+	return c.updateObserved(n, change, nil)
+}
+func (c *cleanupJournal) updateObserved(n string, change func(*cleanupObservation) error, o *scaleObservation) (err error) {
+	defer func() {
+		if err != nil {
+			o.fail("cleanup_journal", "cleanup_update_failed")
+		}
+	}()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v, e := c.read(n)
+	v, e := c.readObserved(n, o)
 	if errors.Is(e, os.ErrNotExist) {
+		o.missingJournal()
 		v = cleanupObservation{Schema: cleanupSchema, Owner: c.owner, Job: n}
 	} else if e != nil {
 		return e
 	}
 	if !validJobName.MatchString(n) {
+		o.fail("cleanup_journal", "invalid_cleanup_identity")
 		return fmt.Errorf("invalid cleanup identity")
 	}
 	before, _ := json.Marshal(v)
@@ -178,30 +222,40 @@ func (c *cleanupJournal) update(n string, change func(*cleanupObservation) error
 }
 
 func (f *fleet) observeScheduler(n string, id int, event scaleset.JobMessageBase, result string) error {
+	return f.observeSchedulerObserved(n, id, event, result, nil)
+}
+func (f *fleet) observeSchedulerObserved(n string, id int, event scaleset.JobMessageBase, result string, o *scaleObservation) error {
 	if f.cleanupLog == nil {
 		return nil
 	}
 	// The SDK JobID is opaque, not the numeric GitHub Actions job ID. Do not
 	// manufacture an attempt, source SHA or project producer identity here.
-	if f.state(n) == nil {
-		if _, e := f.cleanupLog.read(n); errors.Is(e, os.ErrNotExist) {
+	state := f.state(n)
+	if o != nil {
+		o.StateExists = boolValue(state != nil)
+	}
+	if state == nil {
+		if _, e := f.cleanupLog.readObserved(n, o); errors.Is(e, os.ErrNotExist) {
+			o.missingJournal()
 			return nil
 		} else if e != nil {
 			return e
 		}
 	}
 	if !cacheRepo.MatchString(event.OwnerName+"/"+event.RepositoryName) || event.WorkflowRunID <= 0 || id <= 0 || len(event.JobID) > 256 || !ascii(event.JobID) {
+		o.fail("scheduler_observation", "invalid_scheduler_identity")
 		return fmt.Errorf("invalid scheduler cleanup identity")
 	}
 	if !oneOf(result, "", "succeeded", "failed", "canceled", "skipped", "abandoned") {
 		result = "unknown"
 	}
 	native := cleanupNative{event.OwnerName + "/" + event.RepositoryName, event.WorkflowRunID, event.JobID, id, result}
-	return f.cleanupLog.update(n, func(v *cleanupObservation) error {
+	return f.cleanupLog.updateObserved(n, func(v *cleanupObservation) error {
 		if v.Native != nil {
 			old := *v.Native
 			old.Result = native.Result
 			if old != native || (v.Native.Result != "" && result != "" && v.Native.Result != result) {
+				o.fail("scheduler_observation", "scheduler_identity_changed")
 				return fmt.Errorf("scheduler cleanup identity changed")
 			}
 			if result == "" {
@@ -210,7 +264,7 @@ func (f *fleet) observeScheduler(n string, id int, event scaleset.JobMessageBase
 		}
 		v.Native = &native
 		return nil
-	})
+	}, o)
 }
 
 // Called before deleting any owned resources. Unknown inspect state is kept

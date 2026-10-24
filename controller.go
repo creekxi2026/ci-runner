@@ -296,7 +296,38 @@ func (f *fleet) start(ctx context.Context) (err error) {
 }
 func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) (diagnosticErr error) {
 	ctx, diagnosticEnd := f.diagnostics.Begin(ctx, scaleset.Scale, 1)
-	defer func() { diagnosticEnd(diagnosticErr) }()
+	var observation *scaleObservation
+	if f.diagnostics != nil {
+		observation = &scaleObservation{scaleset.DiagnosticScaleLocal{Origin: "unknown", Reason: "unknown", Handler: "unknown"}}
+		if msg != nil {
+			var available, started, completed uint64
+			for _, e := range msg.JobAvailableMessages {
+				if e != nil {
+					available++
+				}
+			}
+			for _, e := range msg.JobStartedMessages {
+				if e != nil {
+					started++
+				}
+			}
+			for _, e := range msg.JobCompletedMessages {
+				if e != nil {
+					completed++
+				}
+			}
+			observation.Available, observation.Started, observation.Completed = &available, &started, &completed
+		}
+	}
+	defer func() {
+		if observation != nil {
+			if diagnosticErr == nil {
+				observation.Origin, observation.Reason = "none", "none"
+			}
+			f.diagnostics.SetScaleLocal(ctx, observation.DiagnosticScaleLocal)
+		}
+		diagnosticEnd(diagnosticErr)
+	}()
 	f.scaleMu.Lock()
 	defer f.scaleMu.Unlock()
 	if msg == nil || msg.MessageID == listener.InitialMessageID {
@@ -319,6 +350,9 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	if p.done {
 		return nil
 	}
+	if observation != nil {
+		observation.Acquired = boolValue(p.acquired)
+	}
 	if !p.acquired {
 		var ids []int64
 		for _, j := range msg.JobAvailableMessages {
@@ -332,30 +366,35 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 			}
 		}
 		p.acquired = true
+		if observation != nil {
+			observation.Acquired = boolValue(true)
+		}
 	}
 	// JobStarted is scheduler assignment, not proof that an offline listener
 	// has run user code. Only the atomic job-start hook arbitrates idle cleanup.
-	for _, event := range msg.JobStartedMessages {
+	for index, event := range msg.JobStartedMessages {
+		observation.event("started", index)
 		if event != nil {
-			if err := f.observeScheduler(event.RunnerName, event.RunnerID, event.JobMessageBase, ""); err != nil {
+			if err := f.observeSchedulerObserved(event.RunnerName, event.RunnerID, event.JobMessageBase, "", observation); err != nil {
 				return err
 			}
 		}
-		if err := f.observeInputAssignment(event, false); err != nil {
+		if err := f.observeInputAssignmentObserved(event, false, observation); err != nil {
 			return err
 		}
 		f.changed()
 		f.cacheJobEvent(event)
 	}
-	for _, event := range msg.JobCompletedMessages {
+	for index, event := range msg.JobCompletedMessages {
 		if event == nil {
 			continue
 		}
-		if err := f.observeScheduler(event.RunnerName, event.RunnerID, event.JobMessageBase, event.Result); err != nil {
+		observation.event("completed", index)
+		if err := f.observeSchedulerObserved(event.RunnerName, event.RunnerID, event.JobMessageBase, event.Result, observation); err != nil {
 			return err
 		}
 		assigned := &scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase}
-		if err := f.observeInputAssignment(assigned, true); err != nil {
+		if err := f.observeInputAssignmentObserved(assigned, true, observation); err != nil {
 			return err
 		}
 		f.changed()
@@ -363,9 +402,14 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 		if n, ok := f.snapshot()[event.RunnerName]; ok {
 			f.cleanup(event.RunnerName, n)
 			if _, pending := f.snapshot()[event.RunnerName]; pending {
+				observation.fail("completion_cleanup", "completion_cleanup_pending")
 				return fmt.Errorf("completion cleanup pending")
 			}
 		}
+	}
+	if observation != nil {
+		observation.Handler, observation.EventIndex = "unknown", nil
+		observation.NameValid, observation.StateExists, observation.JournalExists, observation.JournalSafe = nil, nil, nil, nil
 	}
 	if f.demandSource != nil {
 		if err := f.reconcileCurrent(ctx); err != nil {
