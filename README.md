@@ -522,3 +522,8 @@ first failed run comparison; they contain no compared values or exception text.
 The v2 [allocation startup session binding](docs/intake-startup-binding.md) uses
 one-use material over existing Docker stdin and an inherited anonymous socket.
 It authenticates the trusted startup session; it does not authenticate a PID.
+
+Optional typed controller/SDK stage evidence is described in
+[stage diagnostics](docs/stage-diagnostics.md), including the opt-in private
+profile, bounded sink, local SDK patch provenance and evidence limits; it does
+not relax matching image revisions or authorize an observer window.

@@ -65,6 +65,7 @@ func dockerContext(ctx context.Context, method, path string, body any, out any) 
 
 type obj = map[string]any
 type fleet struct {
+	diagnostics          *scaleset.Diagnostics
 	mu                   sync.Mutex
 	client               runnerAPI
 	session              listener.Client
@@ -127,6 +128,13 @@ func (f *fleet) address(ctx context.Context, name, network string) (string, erro
 	return v.NetworkSettings.Networks[network].IPAddress, err
 }
 func (f *fleet) start(ctx context.Context) (err error) {
+	ctx, diagnosticEnd := f.diagnostics.Begin(ctx, scaleset.Start, 1)
+	defer func() {
+		if err == nil {
+			f.diagnostics.Count(ctx, scaleset.DiagnosticCounts{Started: 1})
+		}
+		diagnosticEnd(err)
+	}()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -286,7 +294,9 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	log.Printf("started job %s", name)
 	return nil
 }
-func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) error {
+func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) (diagnosticErr error) {
+	ctx, diagnosticEnd := f.diagnostics.Begin(ctx, scaleset.Scale, 1)
+	defer func() { diagnosticEnd(diagnosticErr) }()
 	f.scaleMu.Lock()
 	defer f.scaleMu.Unlock()
 	if msg == nil || msg.MessageID == listener.InitialMessageID {
@@ -401,7 +411,15 @@ func ensureScaleSet(ctx context.Context, c scaleSets, name string) (*scaleset.Ru
 	return existing, nil
 }
 
-func run() error {
+func run() (err error) {
+	diagnostics := openDiagnostics(os.Getenv("CI_DIAGNOSTIC_PROFILE"), os.Stdout)
+	defer closeDiagnostics(diagnostics)
+	_, initEnd := diagnostics.Begin(context.Background(), scaleset.InitConfig, 1)
+	defer func() {
+		if initEnd != nil {
+			initEnd(err)
+		}
+	}()
 	maxJobs, err := poolJobLimit(os.Getenv("RUNNER_MAX_JOBS"))
 	if err != nil {
 		return err
@@ -424,11 +442,15 @@ func run() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	initEnd(nil)
+	_, initEnd = diagnostics.Begin(ctx, scaleset.InitCredentials, 1)
 	token, err := os.ReadFile("/run/secrets/github_token")
 	if err != nil {
 		return err
 	}
-	c, err := scaleset.NewClientWithPersonalAccessToken(scaleset.NewClientWithPersonalAccessTokenConfig{GitHubConfigURL: os.Getenv("GITHUB_CONFIG_URL"), PersonalAccessToken: string(bytes.TrimSpace(token))})
+	initEnd(nil)
+	_, initEnd = diagnostics.Begin(ctx, scaleset.InitClient, 1)
+	c, err := scaleset.NewClientWithPersonalAccessToken(scaleset.NewClientWithPersonalAccessTokenConfig{GitHubConfigURL: os.Getenv("GITHUB_CONFIG_URL"), PersonalAccessToken: string(bytes.TrimSpace(token))}, scaleset.WithDiagnostics(diagnostics))
 	if err != nil {
 		return err
 	}
@@ -448,7 +470,7 @@ func run() error {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, proxyEnv: proxyEnv, image: runnerImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{diagnostics: diagnostics, maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, proxyEnv: proxyEnv, image: runnerImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}
@@ -460,6 +482,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	initEnd(nil)
+	_, initEnd = diagnostics.Begin(ctx, scaleset.InitDisk, 1)
 	f.work, err = openSharedWork(os.Getenv("JOB_WORK_ROOT"), os.Getenv("JOB_WORK_VOLUME"), f.owner, maxJobs)
 	if err != nil {
 		return err
@@ -494,6 +518,8 @@ func run() error {
 	if err = f.openGitObjectCache(ctx, os.Getenv("GIT_OBJECT_CACHE_MODE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL"), os.Getenv("GIT_OBJECT_CACHE_REFS")); err != nil {
 		return err
 	}
+	initEnd(nil)
+	initEnd = nil
 	f.changes = make(chan struct{}, 1)
 	f.demandSource = scaleSetDemand(c, os.Getenv("SCALE_SET_NAME"), func() int { _, id := f.api(); return id })
 	// Recovery and the local janitor start before registration/session acquisition.
@@ -509,8 +535,12 @@ func run() error {
 	go func() { defer close(localDone); f.maintain(localCtx, 10*time.Second) }()
 	coordinatorDone := make(chan struct{})
 	go func() { defer close(coordinatorDone); f.coordinate(ctx, 10*time.Second) }()
+	var diagnosticAttempt uint64
 	retry(ctx, time.Second, func() error {
-		set, e := ensureScaleSet(ctx, c, os.Getenv("SCALE_SET_NAME"))
+		diagnosticAttempt++
+		callCtx, end := diagnostics.Begin(ctx, scaleset.EnsureSet, diagnosticAttempt)
+		set, e := ensureScaleSet(callCtx, c, os.Getenv("SCALE_SET_NAME"))
+		end(e)
 		if e != nil {
 			return e
 		}

@@ -472,7 +472,14 @@ func (f *fleet) listen(ctx context.Context, delay time.Duration) error {
 	session := f.session.Session()
 	if session.Statistics != nil || f.demandSource != nil {
 		initial := &scaleset.RunnerScaleSetMessage{MessageID: bootstrapID, Statistics: session.Statistics}
-		if err := retrySession(ctx, delay, func() error { return f.Scale(ctx, initial) }); err != nil {
+		var attempt uint64
+		if err := retrySession(ctx, delay, func() error {
+			attempt++
+			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Bootstrap, attempt)
+			err := f.Scale(callCtx, initial)
+			end(err)
+			return err
+		}); err != nil {
 			return err
 		}
 		f.scaleMu.Lock()
@@ -482,17 +489,36 @@ func (f *fleet) listen(ctx context.Context, delay time.Duration) error {
 	last := 0
 	for ctx.Err() == nil {
 		var msg *scaleset.RunnerScaleSetMessage
-		if err := retrySession(ctx, delay, func() error { var err error; msg, err = f.session.GetMessage(ctx, last, 3); return err }); err != nil {
+		var pollAttempt uint64
+		if err := retrySession(ctx, delay, func() error {
+			pollAttempt++
+			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Poll, pollAttempt)
+			var err error
+			msg, err = f.session.GetMessage(callCtx, last, 3)
+			end(err)
+			return err
+		}); err != nil {
 			return err
 		}
 		if msg == nil {
 			continue
 		}
-		if err := retrySession(ctx, delay, func() error { return f.Scale(ctx, msg) }); err != nil {
+		var scaleAttempt uint64
+		if err := retrySession(ctx, delay, func() error {
+			scaleAttempt++
+			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Scale, scaleAttempt)
+			err := f.Scale(callCtx, msg)
+			end(err)
+			return err
+		}); err != nil {
 			return err
 		}
-		if err := retrySession(ctx, delay, func() error {
-			err := f.session.DeleteMessage(ctx, msg.MessageID)
+		var ackAttempt uint64
+		if err := retrySession(ctx, delay, func() (diagnosticErr error) {
+			ackAttempt++
+			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Ack, ackAttempt)
+			defer func() { end(diagnosticErr) }()
+			err := f.session.DeleteMessage(callCtx, msg.MessageID)
 			if errors.Is(err, scaleset.NotFoundError) {
 				return nil
 			}
