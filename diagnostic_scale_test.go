@@ -53,13 +53,15 @@ func localRecords(t *testing.T, b []byte) []map[string]any {
 	return out
 }
 
-// Real Scale and filesystem handlers, no live Docker or GitHub. Every failure
+// Real Scale and filesystem handlers, no live Docker or GitHub.
+// Out-of-namespace events now commit routing dispositions and complete; the
+// lower-level cleanup reader still rejects these names (cleanup_journal_test). Every failure
 // runs twice to exercise the same message's acquired/retry state. Fault sinks
 // include an actually full, blocked queue; it is released and joined before exit.
 func TestDiagnosticScaleLocalBranches(t *testing.T) {
 	cases := []struct{ name, origin, reason, handler string }{
-		{"started-invalid", "cleanup_journal", "invalid_cleanup_identity", "started"},
-		{"completed-invalid", "cleanup_journal", "invalid_cleanup_identity", "completed"},
+		{"started-invalid", "none", "none", "unknown"},
+		{"completed-invalid", "none", "none", "unknown"},
 		{"unsafe", "cleanup_journal", "unsafe_cleanup_record", "started"},
 		{"malformed", "cleanup_journal", "invalid_cleanup_record", "started"},
 		{"foreign", "cleanup_journal", "foreign_cleanup_record", "started"},
@@ -167,7 +169,7 @@ func TestDiagnosticScaleLocalBranches(t *testing.T) {
 					f.cleanupLog = nil
 					f.jobs[n] = "net"
 				}
-				if tc.handler == "completed" {
+				if tc.handler == "completed" || tc.name == "completed-invalid" {
 					msg.JobStartedMessages = nil
 					msg.JobCompletedMessages = []*scaleset.JobCompleted{nil, {RunnerName: event.RunnerName, RunnerID: event.RunnerID, JobMessageBase: event.JobMessageBase, Result: "failed"}}
 				}
@@ -281,14 +283,14 @@ func TestDiagnosticScaleLocalBranches(t *testing.T) {
 						t.Fatalf("classification %+v", v)
 					}
 					if tc.name == "started-invalid" || tc.name == "completed-invalid" {
-						if v["name_valid"] != false || v["state_exists"] != false || v["journal_exists"] != nil || v["journal_safe"] != nil || v["event_index"] != float64(2) {
+						if v["name_valid"] != nil || v["state_exists"] != nil || v["journal_exists"] != nil || v["journal_safe"] != nil || v["event_index"] != nil {
 							t.Fatalf("unknown conflated %+v", v)
 						}
 					}
 					if i == 0 && tc.name == "acquire-unknown" && v["acquired"] != false {
 						t.Fatal("acquire state")
 					}
-					if tc.name != "acquire-unknown" && tc.name != "missing-success" && v["acquired"] != true {
+					if tc.name != "acquire-unknown" && tc.name != "missing-success" && tc.name != "started-invalid" && tc.name != "completed-invalid" && v["acquired"] != true {
 						t.Fatal("acquired")
 					}
 				}
@@ -335,8 +337,8 @@ func TestDiagnosticScaleLocalLossDoesNotWait(t *testing.T) {
 		t.Fatal(e)
 	}
 	f, n, _ := journalFixture(t)
-	f.jobs = map[string]string{}
-	n = "../SECRET"
+	// Keep a genuine failing local identity with a valid allocation name;
+	// out-of-namespace names now commit a successful routing disposition.
 	f.diagnostics = d
 	start := time.Now()
 	for i := 0; i < 100; i++ {

@@ -404,3 +404,10 @@ project retains its strict decoder, identity predicates and gate authority.
 V2 job intake requires [allocation startup session binding](intake-startup-binding.md)
 before the unchanged helper/provider gate. This is a one-use existing-channel
 capability, separate from diagnostic observations and OS process identity.
+
+Scheduler routing remains controller-owned: events outside the allocation name
+namespace commit an owner-only `.audit` disposition before later events and
+current demand proceed, as described in
+[cleanup observations](cleanup-observations.md#events-outside-the-allocation-namespace).
+This does not supply a service teardown proof or native project receipt;
+service cleanup continues to use the original allocation lease and journal.
