@@ -527,3 +527,9 @@ Optional typed controller/SDK stage evidence is described in
 [stage diagnostics](docs/stage-diagnostics.md) and [local Scale return classifications](docs/scale-local-diagnostics.md), including the opt-in private
 profile, bounded sink, local SDK patch provenance and evidence limits; it does
 not relax matching image revisions or authorize an observer window.
+
+Scheduler events outside the controller's allocation-name namespace are durably
+recorded as owner-only routing dispositions before Scale advances to later
+events and demand; they never authorize a resource path or deletion by runner
+ID. Valid allocation cleanup and ack retries remain enforced; see
+[events outside the allocation namespace](docs/cleanup-observations.md#events-outside-the-allocation-namespace).

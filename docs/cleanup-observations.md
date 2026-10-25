@@ -140,3 +140,47 @@ Local image IDs bypass registry admission only in that test. Native SDK/API data
 in this fixture are explicitly synthetic. The project fixture verifies real PG
 cleanup and its unchanged fixed final consumer in a separate UID1001 RO mount.
 Native trusted workflow execution and fleet rollout require separate acceptance.
+
+## Events outside the allocation namespace
+
+With the journal enabled, Scale handles a started/completed event whose name
+fails `validJobName` by committing a routing disposition before continuing to
+later events and current demand. This uses the local allocation invariant:
+creation generates `ci-job-<8 hex>-<3 hex>`, shared leases validate it, and
+restart recovery admits only that namespace. It does not infer absence from
+missing memory state, match a resource by scheduler runner ID, infer the event's
+upstream cause, or claim that any resource was cleaned. A contradictory local
+state entry outside the namespace fails closed. Valid-name events retain their
+existing journal, assignment, cleanup and retry rules, including when only a
+durable journal or lease remains after restart.
+
+Dispositions are owner-only files at
+`cleanup-v1/<owner>/unaddressable-<sha256>.audit` (0444, root 0700 parents).
+The closed `ci-unaddressable-event/v1` record contains `schema`, `owner_id`,
+`handler` (started/completed), `reason=outside_runner_namespace`, and
+`event_sha256`. The digest covers the canonical JSON encoding of owner,
+handler and the typed SDK event; raw names, native identity, body and results
+are never stored in this record or used in its path. The fingerprint is for
+local deduplication, not proof of scheduler authenticity or a secret redaction
+protocol. No diagnostic schema or collector receipt fields change.
+
+The existing owner flock and journal mutex serialize writes. Publication uses
+exclusive temporary creation, file fsync, rename and directory fsync; retries
+validate an existing exact owner/mode/single-link/canonical record and repeat
+directory fsync. A stale `.new` name is unlinked without following it. A write,
+validation or sync error returns from Scale and prevents ack; a later event or
+reconcile failure also prevents ack. Redelivery revalidates the same record;
+a process crash before ack leaves either an unpublished temp or a durable
+idempotent record. Only after all events and demand succeed may listen ack, and
+ack failures retain the existing retry behavior. There is no pending cleanup
+hidden in the disposition: leases, labeled resources and per-allocation
+journals retain all original janitor/recovery responsibilities, independent of
+message delivery. No message queue or replay of the fingerprint is needed.
+
+`.audit` and `.audit.new` do not enter the existing `.json` allocation recovery
+or project receipt readers; retain the audit records with owner evidence and
+include them in the existing pilot archival budget (1000 records / 64 MiB).
+They are not automatically deleted. Operators must archive them explicitly;
+do not overwrite old evidence or replay a consumed observation window when
+installing a new candidate. A new controller revision still needs its matching
+reviewed image pair and newly generated operation inputs before rollout.

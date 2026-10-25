@@ -375,6 +375,12 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	for index, event := range msg.JobStartedMessages {
 		observation.event("started", index)
 		if event != nil {
+			if recorded, err := f.recordUnaddressableEvent(event.RunnerName, "started", event); recorded {
+				if err != nil {
+					return err
+				}
+				continue
+			}
 			if err := f.observeSchedulerObserved(event.RunnerName, event.RunnerID, event.JobMessageBase, "", observation); err != nil {
 				return err
 			}
@@ -390,6 +396,12 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 			continue
 		}
 		observation.event("completed", index)
+		if recorded, err := f.recordUnaddressableEvent(event.RunnerName, "completed", event); recorded {
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if err := f.observeSchedulerObserved(event.RunnerName, event.RunnerID, event.JobMessageBase, event.Result, observation); err != nil {
 			return err
 		}
