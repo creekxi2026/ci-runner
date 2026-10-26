@@ -15,8 +15,7 @@ runner ID, job ID, workflow ID or business attribution. Message nil leaves count
 null; a present, empty message gives zero. `acquired` reflects the existing
 messageProgress read/write, not whether this invocation made an acquire request.
 
-`name_valid` comes from the actual cleanup or input validator; those validators
-retain their distinct original rules. `state_exists` reuses the existing state()
+`name_valid` comes from the cleanup validator. `state_exists` reuses the existing state()
 result (including its existing lazy initialization). `journal_exists=true` means
 its existing open succeeded, false means ENOENT; other open errors remain null.
 `journal_safe` describes the existing descriptor metadata/size validation, not
@@ -27,11 +26,11 @@ These are observations at those original operations, not a later atomic snapshot
 ## Return-point map and callers
 
 All existing callers retain nil-observation wrappers. The only enabled path is
-Scale -> observeSchedulerObserved / observeInputAssignmentObserved. Scheduler
+Scale -> observeSchedulerObserved. Scheduler
 passes the same optional observation into readObserved/updateObserved and its
 identity callback. Other recovery/cleanup callers keep the original wrappers.
-Input publication's independent assignJobInputs path keeps its original wrapper
-and validation; inputAssignment delegates to the same validator with nil.
+The retired job-input publisher no longer produces local return classifications;
+archive readers retain its old origin/reason pairs for historical evidence.
 
 | Actual return condition | origin / reason | Caller / propagation |
 | --- | --- | --- |
@@ -44,12 +43,6 @@ and validation; inputAssignment delegates to the same validator with nil.
 | scheduler repository/run/runner/job identity fails | scheduler_observation / invalid_scheduler_identity | observeSchedulerObserved -> Scale |
 | old/new scheduler identity or result conflicts | scheduler_observation / scheduler_identity_changed | update's original callback -> scheduler -> Scale |
 | update marshal/size, no-change sync, temp removal/open/write/chmod/fsync/close/rename/directory sync returns error | cleanup_journal / cleanup_update_failed | updateObserved fallback only when no deeper classification exists; original error returned unchanged |
-| input name validator fails | input_assignment / invalid_input_runner | inputAssignmentObserved -> input observer -> Scale |
-| input runner/run/repository identity fails | input_assignment / invalid_input_assignment | same validator; independent assignJobInputs uses nil wrapper |
-| input spec Stat fails except consumed ENOENT | input_assignment / input_spec_stat_failed | input observer -> Scale |
-| assignment ReadFile fails except consumed ENOENT | input_assignment / input_assignment_read_failed | input observer -> Scale |
-| old sealed bytes differ | input_assignment / sealed_input_changed | input observer -> Scale |
-| assignment b.write returns any error | input_assignment / input_assignment_write_failed | fallback at actual write boundary; no claim about a deeper file operation |
 | completion cleanup retains the job | completion_cleanup / completion_cleanup_pending | Scale after its original cleanup/snapshot; no claim about cleanup's internal root cause |
 | cancellation, acquire, demand/reconcile/start or otherwise unclassified error | unknown / unknown | existing Scale return; no inherited child classification or guessed cause |
 | successful Scale (including nil/initial/done) | none / none | same inner end; unexecuted fields remain null |

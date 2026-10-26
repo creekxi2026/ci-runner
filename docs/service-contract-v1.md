@@ -1,9 +1,5 @@
 # Generic job services v1
 
-The opt-in v2 [private input contract](private-inputs.md) adds operator-owned
-persistent resource mounts to separately authenticated dispatch pools. It does
-not change the service v1 envelope or enable mounts for ordinary PR workers.
-
 The optional [controller cleanup journal](cleanup-observations.md) retains
 infrastructure observations after job deletion. It does not extend this adapter
 ABI with teardown or implement a project terminal receipt. Missing project
@@ -308,106 +304,12 @@ bounds, persistence, compatibility and retention contract. Old controllers
 reject this optional catalog field; old catalogs require no changes.
 
 
-## Trusted job inputs
+## Retired job-input extension
 
-The optional `ci-job-inputs/v1` policy is independent of service payload semantics.
-It preserves the service v1 lifecycle and does not grant an adapter teardown
-ownership. `fleet.start` seals `ci-job-input-spec/v1` (name, owner, volume, complete
-Docker spec) under `inputs-v1/<owner>/<runner>/spec.json`, then calls the reviewed
-adapter's `prepare`. The spec retains JIT credentials and stays root-only through
-its 0700 parent; workers never receive it. There is one controller Docker create.
-
-The adapter receives bounded stdin `{schema:"ci-job-input-call/v1", operation,
-directory}` and no output is logged. `prepare` returns 0 before creation. The
-controller publishes `ci-job-assignment/v1` from authenticated scale-set events
-(repository, run ID, opaque scheduler job ID, runner name/ID, event). It does not
-invent attempt or numeric Actions job ID. The project adapter must resolve those
-with its authenticated provider and existing owner release before publication.
-Maintenance callback identity must be independently bound by that adapter.
-
-Only configured subdirectories are mounted RO; a separate generic gate directory
-is mounted at `/run/ci-input-gate`. Existing firewall/network readiness runs first.
-The job-start hook then validates root-owned 0444 `ready.json` against native
-repository/run/attempt, after the adapter has checked numeric job/runner identity
-and published project input. Missing input waits up to 900s; invalid input fails.
-The binding schema is `ci-job-input-ready/v1` with repository, run_id, attempt and
-positive numeric job_id. Candidates cannot create bindings or replace the hook
-before the first step. No owner/private spec/token/journal mount enters workers.
-
-The coordinator alternates durable active-runner/receipt cursors and executes one
-scope with a 60s process-group deadline per turn. It advances before invocation;
-75 rotates/retries, 0/2 settles. The active lane uses the controller’s current
-runner set, including gates already released into an in-job wait; stale backlog
-cannot consume those live jobs’ wait window. Reopen resumes both cursors. New admission stops
-above 1000 retained scope records; existing scopes continue below the 10000-entry
-inventory ceiling. Orphans/settled records remain diagnostic evidence pending
-operator retention review, never deletion authority. Controller disk/proxy/service/
-registration/job/lease/terminal/teardown ownership is unchanged. Adapter exit does
-not authorize a business release or independent acceptance.
-
-A rollback stops new demand first, preserves active-job mounts and receipt
-reconciliation, and retains compatible project readers. Disabling inputs is not
-a way to run workflows requiring them. Independent cross-repository review and
-explicit installation are required before enabling this optional interface.
-
-### Authenticated allocation sessions (opt-in v2)
-
-`ci-job-inputs/v2` retains the sealed spec, assignment, gate and cleanup ownership
-above. Before Listener starts, the image-owned runner launcher interposes on the
-pinned Actions Runner 2.337.0 `Runner.Worker spawnclient` inherited anonymous pipe.
-It reads the first `NewJobRequest` frame (int32 message type, int32 byte length,
-UTF-16LE JSON) before starting the actual Worker. The initial message is bounded
-to 8 MiB. Unknown types, malformed frames and authentication timeout fail closed.
-This is a version-specific protocol adapter: a runner upgrade requires protocol
-regression evidence before enabling v2 with that version.
-
-The controller creates `/run/ci-intake/session.sock` inside this job's root-owned
-RO input subpath. It accepts once and removes the socket name before executing
-the pinned policy command. The runner sends one bounded JSON line:
-`{schema:"ci-job-intake/v1",message:<original allocation object>}`. The controller
-supplies the adapter with `{schema:"ci-job-input-session/v1",directory,message}`
-over stdin. The directory comes from the controller, never from that message.
-The generic core does not interpret project credentials or grant state authority.
-The installed adapter must authenticate the original allocation against the
-controller assignment, live provider and its exact installed workflow policy.
-
-The adapter's first stdout byte must be ASCII `0`; only that byte is forwarded.
-It must publish the normal immutable gate before acknowledging. Until then no
-Worker, hook, checkout or workflow step starts. All other stdout/stderr is
-discarded. Subsequent input, EOF, cancellation, session timeout, controller exit
-or runner reclamation revoke the helper process group. The controller waits for
-session teardown before closing its input root. The socket has no reconnect,
-credential refresh or arbitrary-command protocol. Recovery never revives a
-consumed token; a new assigned job must establish its own session. The v1 timer
-adapter is disabled for v2 scopes, so no token-file fallback runs concurrently.
-
-V2 additionally permits explicitly declared RO executable mounts below a
-project-owned `/opt/<namespace>/<subdirectory>`; core runtime/tool paths remain
-reserved. The policy command's root-owned ancestry and exact SHA256 are checked
-at startup and invocation. A project must separately pin its executable closure,
-private operation allowlist, provider checks and state publication guards. A v2
-policy does not itself provide those project guarantees or deployment authority.
-
-The [version-specific Worker protocol](worker-intake-protocol.md) specifies
-message validation, in-session bounded waiting, native exit/cancellation and
-repeatable offline executable checks. A project returning 75 must keep the same
-helper alive and wait before its first `0`; the one-shot bridge does not reconnect
-or retry an exited helper. Writes to the host socket and Worker pipe remain
-interruptible. Worker group cleanup includes descendants after leader exit.
-
-Optional pre-Worker stage observations follow
-[intake diagnostics (v2 records / v1 producer wire)](intake-diagnostics-v1.md); they grant no service authority
-and preserve the one-use intake and ready protocol.
-Provider decode/run comparison reasons remain helper observations only; the
-project retains its strict decoder, identity predicates and gate authority.
-
-V2 job intake requires [allocation startup session binding](intake-startup-binding.md)
-before the unchanged helper/provider gate. This is a one-use existing-channel
-capability, separate from diagnostic observations and OS process identity.
-
-Scheduler routing remains controller-owned: events outside the allocation name
-namespace commit an owner-only `.audit` disposition before later events and
-current demand proceed, as described in
-[cleanup observations](cleanup-observations.md#events-outside-the-allocation-namespace).
-This does not supply a service teardown proof or native project receipt;
-service cleanup continues to use the original allocation lease and journal.
+`ci-job-inputs/v1` and `/v2` are no longer implemented. Nonempty
+`JOB_INPUT_POLICY_FILE` configurations fail before controller initialization;
+legacy runner input/bootstrap settings fail before job startup. Drain and migrate
+any protected input workflow before changing that configuration; do not remove a
+policy merely to bypass the rejection. Retain a matching old image pair until
+migration is verified. This retirement does not change the service v1 envelope,
+reviewed service adapters, publication, resource bounds or cleanup ownership.

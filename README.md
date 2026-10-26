@@ -472,56 +472,19 @@ before enabling the optional admission/teardown extension. Projects own their
 terminal schema and host collector; ordinary worker APIs remain unchanged.
 
 
-## Optional trusted project inputs
+## Retired trusted project inputs
 
-Separately authenticated dispatch pools may declare persistent resource subpaths
-through the optional [private input contract](docs/private-inputs.md). These
-resources are present in trusted Listener containers before assignment; the v2
-helper must authenticate the provider before allowing any Worker code. Do not
-enable this extension on a mixed PR pool. It is disabled by default.
+The optional `ci-job-inputs/v1` and `/v2` interfaces have been removed, including
+Worker interception, private allocation sessions and their diagnostics. Ordinary
+jobs use the upstream Actions Runner Worker directly; the atomic job-start claim,
+service v1 leases, isolation, caches and cancellation/recovery remain in place.
 
-`JOB_INPUT_POLICY_FILE` enables the generic `ci-job-inputs/v1` controller adapter
-contract described in [the service contract](docs/service-contract-v1.md#trusted-job-inputs).
-The default is disabled. The controller seals the actual runner spec and later
-its authenticated assignment, pre-mounts private per-job read-only publications,
-and retains the single Docker creation and teardown boundary. The immutable
-job-start hook waits for authenticated input before any workflow step. Project
-owner/baseline schemas remain in the consuming repository.
-
-The root-owned policy contains `schema`, `command` (absolute reviewed wrapper
-plus fixed arguments), `sha256` (wrapper bytes), and `mounts` (`name`, `target`
-pairs below `/run`). The controller checks the wrapper on every call. Installed
-imports/toolchains must also be pinned by the project's adapter policy. Enabling
-this requires an independently reviewed adapter and explicit image/mount/config
-installation; this change does not enable it on any deployment.
-
-The opt-in `ci-job-inputs/v2` [allocation session interface](docs/service-contract-v1.md#authenticated-allocation-sessions-opt-in-v2)
-intercepts the pinned Actions Runner 2.337.0 Listener-to-Worker pipe before any
-workflow step. A single-use per-job socket carries the raw allocation only in
-memory to a digest-pinned project adapter; its live session gates Worker startup
-and is revoked on cancellation, disconnect, timeout or controller exit. This
-source change requires independent boundary review and explicit installation;
-v1 deployments retain their existing behavior.
-
-V2 validates the packet before waiting for the independent scheduler assignment.
-That wait shares the proxy's existing initial admission budget and observes
-disconnect/cancellation; assignment delay does not create a new token lifetime.
-
-The [Worker protocol and offline evidence guide](docs/worker-intake-protocol.md)
-fixes the upstream executable, admission/75 waiting contract, cancellation and
-exit behavior, and the limits of the real .NET transport probe.
-
-Optional intake stage diagnostics are described in
-[the intake diagnostics contract](docs/intake-diagnostics-v1.md). They are disabled
-by default and do not authorize or retry a job. Controller v2 records distinguish
-local scheduler/publication observations from forwarded v1 producer stages,
-with a separate process segment, sequence and controller clock.
-Helper-only fixed reasons also distinguish strict provider decoding from the
-first failed run comparison; they contain no compared values or exception text.
-
-The v2 [allocation startup session binding](docs/intake-startup-binding.md) uses
-one-use material over existing Docker stdin and an inherited anonymous socket.
-It authenticates the trusted startup session; it does not authenticate a PID.
+A nonempty `JOB_INPUT_POLICY_FILE` stops the controller before credentials,
+Docker or GitHub access. Legacy runner input/bootstrap settings also stop runner
+startup. Do not simply unset an enabled policy: drain that pool and migrate its
+protected workflow and resources first, or retain its matching old image pair
+until migration is complete. Pools that never enabled the interface need no
+service catalog or cache changes; never delete their volumes or tool seeds.
 
 Optional typed controller/SDK stage evidence is described in
 [stage diagnostics](docs/stage-diagnostics.md) and [local Scale return classifications](docs/scale-local-diagnostics.md), including the opt-in private
