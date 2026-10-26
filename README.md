@@ -486,10 +486,12 @@ protected workflow and resources first, or retain its matching old image pair
 until migration is complete. Pools that never enabled the interface need no
 service catalog or cache changes; never delete their volumes or tool seeds.
 
-Optional typed controller/SDK stage evidence is described in
-[stage diagnostics](docs/stage-diagnostics.md) and [local Scale return classifications](docs/scale-local-diagnostics.md), including the opt-in private
-profile, bounded sink, local SDK patch provenance and evidence limits; it does
-not relax matching image revisions or authorize an observer window.
+Custom typed stage diagnostics and the local scaleset SDK patch are retired.
+The controller uses the exact upstream module version authenticated by go.sum;
+nonempty `CI_DIAGNOSTIC_PROFILE` or `CI_DIAGNOSTIC_OWNER_UID` settings reject
+startup before credentials or registration. The [offline archive reader](docs/scale-local-diagnostics.md)
+remains available for historical evidence. Bounded proxy diagnostics, cleanup
+journals and service terminal checks retain their existing behavior.
 
 Scheduler events outside the controller's allocation-name namespace are durably
 recorded as owner-only routing dispositions before Scale advances to later

@@ -65,7 +65,6 @@ func dockerContext(ctx context.Context, method, path string, body any, out any) 
 
 type obj = map[string]any
 type fleet struct {
-	diagnostics          *scaleset.Diagnostics
 	mu                   sync.Mutex
 	client               runnerAPI
 	session              listener.Client
@@ -127,13 +126,6 @@ func (f *fleet) address(ctx context.Context, name, network string) (string, erro
 	return v.NetworkSettings.Networks[network].IPAddress, err
 }
 func (f *fleet) start(ctx context.Context) (err error) {
-	ctx, diagnosticEnd := f.diagnostics.Begin(ctx, scaleset.Start, 1)
-	defer func() {
-		if err == nil {
-			f.diagnostics.Count(ctx, scaleset.DiagnosticCounts{Started: 1})
-		}
-		diagnosticEnd(err)
-	}()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -276,40 +268,7 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	log.Printf("started job %s", name)
 	return nil
 }
-func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) (diagnosticErr error) {
-	ctx, diagnosticEnd := f.diagnostics.Begin(ctx, scaleset.Scale, 1)
-	var observation *scaleObservation
-	if f.diagnostics != nil {
-		observation = &scaleObservation{scaleset.DiagnosticScaleLocal{Origin: "unknown", Reason: "unknown", Handler: "unknown"}}
-		if msg != nil {
-			var available, started, completed uint64
-			for _, e := range msg.JobAvailableMessages {
-				if e != nil {
-					available++
-				}
-			}
-			for _, e := range msg.JobStartedMessages {
-				if e != nil {
-					started++
-				}
-			}
-			for _, e := range msg.JobCompletedMessages {
-				if e != nil {
-					completed++
-				}
-			}
-			observation.Available, observation.Started, observation.Completed = &available, &started, &completed
-		}
-	}
-	defer func() {
-		if observation != nil {
-			if diagnosticErr == nil {
-				observation.Origin, observation.Reason = "none", "none"
-			}
-			f.diagnostics.SetScaleLocal(ctx, observation.DiagnosticScaleLocal)
-		}
-		diagnosticEnd(diagnosticErr)
-	}()
+func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) error {
 	f.scaleMu.Lock()
 	defer f.scaleMu.Unlock()
 	if msg == nil || msg.MessageID == listener.InitialMessageID {
@@ -332,9 +291,6 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 	if p.done {
 		return nil
 	}
-	if observation != nil {
-		observation.Acquired = boolValue(p.acquired)
-	}
 	if !p.acquired {
 		var ids []int64
 		for _, j := range msg.JobAvailableMessages {
@@ -348,14 +304,10 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 			}
 		}
 		p.acquired = true
-		if observation != nil {
-			observation.Acquired = boolValue(true)
-		}
 	}
 	// JobStarted is scheduler assignment, not proof that an offline listener
 	// has run user code. Only the atomic job-start hook arbitrates idle cleanup.
-	for index, event := range msg.JobStartedMessages {
-		observation.event("started", index)
+	for _, event := range msg.JobStartedMessages {
 		if event != nil {
 			if recorded, err := f.recordUnaddressableEvent(event.RunnerName, "started", event); recorded {
 				if err != nil {
@@ -363,25 +315,24 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 				}
 				continue
 			}
-			if err := f.observeSchedulerObserved(event.RunnerName, event.RunnerID, event.JobMessageBase, "", observation); err != nil {
+			if err := f.observeScheduler(event.RunnerName, event.RunnerID, event.JobMessageBase, ""); err != nil {
 				return err
 			}
 		}
 		f.changed()
 		f.cacheJobEvent(event)
 	}
-	for index, event := range msg.JobCompletedMessages {
+	for _, event := range msg.JobCompletedMessages {
 		if event == nil {
 			continue
 		}
-		observation.event("completed", index)
 		if recorded, err := f.recordUnaddressableEvent(event.RunnerName, "completed", event); recorded {
 			if err != nil {
 				return err
 			}
 			continue
 		}
-		if err := f.observeSchedulerObserved(event.RunnerName, event.RunnerID, event.JobMessageBase, event.Result, observation); err != nil {
+		if err := f.observeScheduler(event.RunnerName, event.RunnerID, event.JobMessageBase, event.Result); err != nil {
 			return err
 		}
 		assigned := &scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase}
@@ -390,14 +341,9 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 		if n, ok := f.snapshot()[event.RunnerName]; ok {
 			f.cleanup(event.RunnerName, n)
 			if _, pending := f.snapshot()[event.RunnerName]; pending {
-				observation.fail("completion_cleanup", "completion_cleanup_pending")
 				return fmt.Errorf("completion cleanup pending")
 			}
 		}
-	}
-	if observation != nil {
-		observation.Handler, observation.EventIndex = "unknown", nil
-		observation.NameValid, observation.StateExists, observation.JournalExists, observation.JournalSafe = nil, nil, nil, nil
 	}
 	if f.demandSource != nil {
 		if err := f.reconcileCurrent(ctx); err != nil {
@@ -448,14 +394,9 @@ func run() (err error) {
 	if os.Getenv("JOB_INPUT_POLICY_FILE") != "" {
 		return fmt.Errorf("JOB_INPUT_POLICY_FILE is retired; drain and migrate the protected pool before upgrading")
 	}
-	diagnostics := openDiagnostics(os.Getenv("CI_DIAGNOSTIC_PROFILE"), os.Stdout)
-	defer closeDiagnostics(diagnostics)
-	_, initEnd := diagnostics.Begin(context.Background(), scaleset.InitConfig, 1)
-	defer func() {
-		if initEnd != nil {
-			initEnd(err)
-		}
-	}()
+	if os.Getenv("CI_DIAGNOSTIC_PROFILE") != "" || os.Getenv("CI_DIAGNOSTIC_OWNER_UID") != "" {
+		return fmt.Errorf("custom stage diagnostics are retired; remove their private profile before upgrading")
+	}
 	maxJobs, err := poolJobLimit(os.Getenv("RUNNER_MAX_JOBS"))
 	if err != nil {
 		return err
@@ -478,15 +419,11 @@ func run() (err error) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	initEnd(nil)
-	_, initEnd = diagnostics.Begin(ctx, scaleset.InitCredentials, 1)
 	token, err := os.ReadFile("/run/secrets/github_token")
 	if err != nil {
 		return err
 	}
-	initEnd(nil)
-	_, initEnd = diagnostics.Begin(ctx, scaleset.InitClient, 1)
-	c, err := scaleset.NewClientWithPersonalAccessToken(scaleset.NewClientWithPersonalAccessTokenConfig{GitHubConfigURL: os.Getenv("GITHUB_CONFIG_URL"), PersonalAccessToken: string(bytes.TrimSpace(token))}, scaleset.WithDiagnostics(diagnostics))
+	c, err := scaleset.NewClientWithPersonalAccessToken(scaleset.NewClientWithPersonalAccessTokenConfig{GitHubConfigURL: os.Getenv("GITHUB_CONFIG_URL"), PersonalAccessToken: string(bytes.TrimSpace(token))})
 	if err != nil {
 		return err
 	}
@@ -506,7 +443,7 @@ func run() (err error) {
 		return err
 	}
 	proxyEnv = append(proxyEnv, dohEnv...)
-	f := &fleet{diagnostics: diagnostics, maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, proxyEnv: proxyEnv, image: runnerImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
+	f := &fleet{maxJobs: maxJobs, cache: cache, seed: seed, toolsSeed: toolsSeed, client: c, allowedEvents: events, proxyEnv: proxyEnv, image: runnerImage, netout: os.Getenv("EGRESS_NETWORK"), owner: os.Getenv("DEPLOYMENT_ID"), jobs: map[string]string{}, unregister: true}
 	if f.owner == "" {
 		return fmt.Errorf("DEPLOYMENT_ID required")
 	}
@@ -518,8 +455,6 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
-	initEnd(nil)
-	_, initEnd = diagnostics.Begin(ctx, scaleset.InitDisk, 1)
 	f.work, err = openSharedWork(os.Getenv("JOB_WORK_ROOT"), os.Getenv("JOB_WORK_VOLUME"), f.owner, maxJobs)
 	if err != nil {
 		return err
@@ -547,8 +482,6 @@ func run() (err error) {
 	if err = f.openGitObjectCache(ctx, os.Getenv("GIT_OBJECT_CACHE_MODE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL"), os.Getenv("GIT_OBJECT_CACHE_REFS")); err != nil {
 		return err
 	}
-	initEnd(nil)
-	initEnd = nil
 	f.changes = make(chan struct{}, 1)
 	f.demandSource = scaleSetDemand(c, os.Getenv("SCALE_SET_NAME"), func() int { _, id := f.api(); return id })
 	// Recovery and the local janitor start before registration/session acquisition.
@@ -564,12 +497,8 @@ func run() (err error) {
 	go func() { defer close(localDone); f.maintain(localCtx, 10*time.Second) }()
 	coordinatorDone := make(chan struct{})
 	go func() { defer close(coordinatorDone); f.coordinate(ctx, 10*time.Second) }()
-	var diagnosticAttempt uint64
 	retry(ctx, time.Second, func() error {
-		diagnosticAttempt++
-		callCtx, end := diagnostics.Begin(ctx, scaleset.EnsureSet, diagnosticAttempt)
-		set, e := ensureScaleSet(callCtx, c, os.Getenv("SCALE_SET_NAME"))
-		end(e)
+		set, e := ensureScaleSet(ctx, c, os.Getenv("SCALE_SET_NAME"))
 		if e != nil {
 			return e
 		}

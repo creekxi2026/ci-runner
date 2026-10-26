@@ -11,6 +11,12 @@ on:
       - git_cache_test.go
       - git-cache.py
       - tests/test_git_cache.py
+      - go.mod
+      - go.sum
+      - cleanup_journal.go
+      - demand.go
+      - start_resource_matrix_test.go
+      - scale_failure_matrix_test.go
       - controller.go
       - controller_recovery.go
       - workspace.go

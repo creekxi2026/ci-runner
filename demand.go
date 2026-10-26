@@ -4,15 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/actions/scaleset"
 	"time"
 )
 
 // Source statistics come from the authenticated scale-set API, not a frozen
 // queue message. A nil source exists only for isolated message-handler tests.
-func (f *fleet) reconcileCurrent(ctx context.Context) (diagnosticErr error) {
-	ctx, diagnosticEnd := f.diagnostics.Begin(ctx, scaleset.Reconcile, 1)
-	defer func() { diagnosticEnd(diagnosticErr) }()
+func (f *fleet) reconcileCurrent(ctx context.Context) error {
 	for range f.jobLimit() {
 		f.mu.Lock()
 		stopped := f.stopping
@@ -23,12 +20,7 @@ func (f *fleet) reconcileCurrent(ctx context.Context) (diagnosticErr error) {
 		if f.demandSource == nil {
 			return nil
 		}
-		demandCtx, end := f.diagnostics.Begin(ctx, scaleset.Demand, 1)
-		want, err := f.demandSource(demandCtx)
-		if err == nil && want >= 0 {
-			f.diagnostics.Count(demandCtx, scaleset.DiagnosticCounts{Demand: uint64(want)})
-		}
-		end(err)
+		want, err := f.demandSource(ctx)
 		if err != nil {
 			return err
 		}
