@@ -69,12 +69,6 @@ func TestDiagnosticScaleLocalBranches(t *testing.T) {
 		{"scheduler-invalid", "scheduler_observation", "invalid_scheduler_identity", "started"},
 		{"scheduler-changed", "scheduler_observation", "scheduler_identity_changed", "started"},
 		{"update", "cleanup_journal", "cleanup_update_failed", "started"},
-		{"input-runner", "input_assignment", "invalid_input_runner", "started"},
-		{"input-identity", "input_assignment", "invalid_input_assignment", "started"},
-		{"input-stat", "input_assignment", "input_spec_stat_failed", "started"},
-		{"input-read", "input_assignment", "input_assignment_read_failed", "started"},
-		{"input-sealed", "input_assignment", "sealed_input_changed", "started"},
-		{"input-write", "input_assignment", "input_assignment_write_failed", "started"},
 		{"completion-pending", "completion_cleanup", "completion_cleanup_pending", "completed"},
 		{"acquire-unknown", "unknown", "unknown", "unknown"},
 		{"missing-success", "none", "none", "unknown"},
@@ -130,41 +124,6 @@ func TestDiagnosticScaleLocalBranches(t *testing.T) {
 					f.jobs[n] = "net"
 					f.cleanupLog.syncDir = func() error { return sentinel }
 				}
-				if strings.HasPrefix(tc.name, "input-") {
-					f.cleanupLog = nil
-					f.jobs[n] = "net"
-					dir := t.TempDir()
-					r, e := os.OpenRoot(dir)
-					if e != nil {
-						t.Fatal(e)
-					}
-					defer r.Close()
-					f.inputs = &jobInputs{root: r, uid: uint32(os.Getuid()), syncDirectory: func(string) error { return nil }}
-					if e = os.Mkdir(filepath.Join(dir, n), 0700); e != nil {
-						t.Fatal(e)
-					}
-					if e = os.WriteFile(filepath.Join(dir, n, "spec.json"), []byte("{}"), 0444); e != nil {
-						t.Fatal(e)
-					}
-					switch tc.name {
-					case "input-runner":
-						delete(f.jobs, n)
-						event.RunnerName = "SECRET-invalid"
-						f.jobs[event.RunnerName] = "net"
-					case "input-identity":
-						event.WorkflowRunID = 0
-					case "input-stat":
-						os.Remove(filepath.Join(dir, n, "spec.json"))
-						os.Symlink("spec.json", filepath.Join(dir, n, "spec.json"))
-					case "input-read":
-						os.Mkdir(filepath.Join(dir, n, "assignment.json"), 0700)
-					case "input-sealed":
-						os.WriteFile(filepath.Join(dir, n, "assignment.json"), []byte("SECRET-old"), 0444)
-					case "input-write":
-						f.inputs.syncDirectory = func(string) error { return sentinel }
-					}
-					root = dir
-				}
 				if tc.name == "completion-pending" {
 					f.cleanupLog = nil
 					f.jobs[n] = "net"
@@ -209,17 +168,12 @@ func TestDiagnosticScaleLocalBranches(t *testing.T) {
 				engine.Transport = localRejectTransport{&got.Trace}
 				defer func() { engine.Transport = old }()
 				for i := 0; i < 2; i++ {
-					if i > 0 && tc.name == "input-write" {
-						if e := f.inputs.root.Remove(n + "/assignment.json"); e != nil {
-							t.Fatal(e)
-						}
-					}
 					ctx, end := d.Begin(context.Background(), scaleset.Scale, uint64(i+1))
 					e := f.Scale(ctx, msg)
 					end(e)
 					if e != nil {
 						// Injected sentinels survive unchanged, not merely via errors.Is.
-						if (tc.name == "update" || tc.name == "input-write" || tc.name == "acquire-unknown" || tc.name == "demand-unknown") && e != sentinel {
+						if (tc.name == "update" || tc.name == "acquire-unknown" || tc.name == "demand-unknown") && e != sentinel {
 							t.Fatal("error identity changed")
 						}
 						if e == sentinel {

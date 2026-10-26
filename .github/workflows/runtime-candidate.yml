@@ -3,20 +3,9 @@ on:
   pull_request:
     paths:
       - Dockerfile
-      - worker_intake.py
-      - job_intake.go
-      - job_intake_test.go
-      - job_inputs.go
-      - job_inputs_test.go
-      - private_inputs.go
-      - private_inputs_test.go
-      - intake_diagnostics.go
-      - intake_diagnostics_test.go
-      - intake_observation_test.go
-      - intake_run_diagnostics_test.go
       - runner.sh
-      - tests/test_worker_intake.py
-      - tests/native_worker_probe.py
+      - retired_inputs_test.go
+      - tests/test_retired_inputs.py
       - incremental_*.go
       - git_cache.go
       - git_cache_test.go

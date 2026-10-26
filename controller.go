@@ -75,7 +75,6 @@ type fleet struct {
 	allowedEvents        map[string]bool
 	services             *serviceManager
 	cleanupLog           *cleanupJournal
-	inputs               *jobInputs
 	cache                *dependencyCache
 	incremental          *incrementalCache
 	gitCache             *gitObjectCache
@@ -242,29 +241,12 @@ func (f *fleet) start(ctx context.Context) (err error) {
 	h["NetworkMode"] = network
 	h["LogConfig"] = obj{"Type": "json-file", "Config": obj{"max-size": "5m", "max-file": "2"}}
 	spec := obj{"Image": f.image, "User": "1001", "Cmd": []string{"/opt/ci/runner.sh"}, "Env": env, "Labels": f.containerLabels(name), "HostConfig": h}
-	if err = f.prepareJobInputs(ctx, name, spec); err != nil {
-		return err
-	}
-	// Exactly one Docker create at the controller boundary, including when a
-	// project adapter supplies admission inputs. Preserve the existing identity.
+	// Keep container creation and teardown under one controller.
 	if err = dockerContext(ctx, "POST", "/containers/create?name="+name, spec, nil); err != nil {
 		return err
 	}
-	bootstrap, attachErr := f.attachBootstrap(ctx, name)
-	if attachErr != nil {
-		return attachErr
-	}
-	if bootstrap != nil {
-		defer bootstrap.Close()
-	}
 	if err = dockerContext(ctx, "POST", "/containers/"+name+"/start", nil, nil); err != nil {
 		return
-	}
-	if bootstrap != nil {
-		if err = f.inputs.sendBootstrap(name, bootstrap); err != nil {
-			return err
-		}
-		bootstrap.Close()
 	}
 	fw := secure()
 	fw["CapAdd"] = []string{"NET_ADMIN"}
@@ -385,9 +367,6 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 				return err
 			}
 		}
-		if err := f.observeInputAssignmentObserved(event, false, observation); err != nil {
-			return err
-		}
 		f.changed()
 		f.cacheJobEvent(event)
 	}
@@ -406,9 +385,6 @@ func (f *fleet) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) 
 			return err
 		}
 		assigned := &scaleset.JobStarted{RunnerID: event.RunnerID, RunnerName: event.RunnerName, JobMessageBase: event.JobMessageBase}
-		if err := f.observeInputAssignmentObserved(assigned, true, observation); err != nil {
-			return err
-		}
 		f.changed()
 		f.cacheJobEvent(assigned)
 		if n, ok := f.snapshot()[event.RunnerName]; ok {
@@ -468,6 +444,10 @@ func ensureScaleSet(ctx context.Context, c scaleSets, name string) (*scaleset.Ru
 }
 
 func run() (err error) {
+	// Refuse retired policy before touching credentials, Docker or GitHub.
+	if os.Getenv("JOB_INPUT_POLICY_FILE") != "" {
+		return fmt.Errorf("JOB_INPUT_POLICY_FILE is retired; drain and migrate the protected pool before upgrading")
+	}
 	diagnostics := openDiagnostics(os.Getenv("CI_DIAGNOSTIC_PROFILE"), os.Stdout)
 	defer closeDiagnostics(diagnostics)
 	_, initEnd := diagnostics.Begin(context.Background(), scaleset.InitConfig, 1)
@@ -557,13 +537,6 @@ func run() (err error) {
 			return err
 		}
 		defer f.cleanupLog.root.Close()
-	}
-	if err = f.openJobInputs(os.Getenv("JOB_INPUT_POLICY_FILE")); err != nil {
-		return err
-	}
-	if f.inputs != nil {
-		defer f.inputs.root.Close()
-		defer f.inputs.closeIntakes()
 	}
 	if err = f.openIncrementalCache(ctx, os.Getenv("INCREMENTAL_CACHE_POLICY_FILE"), string(bytes.TrimSpace(token)), os.Getenv("GITHUB_CONFIG_URL")); err != nil {
 		return err
