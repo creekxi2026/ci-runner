@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-
-set -eEuo pipefail
-
-golangci-lint run ./...
-
-go tool deadcode -test ./...
-

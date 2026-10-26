@@ -465,12 +465,8 @@ func (f *fleet) listen(ctx context.Context, delay time.Duration) error {
 	session := f.session.Session()
 	if session.Statistics != nil || f.demandSource != nil {
 		initial := &scaleset.RunnerScaleSetMessage{MessageID: bootstrapID, Statistics: session.Statistics}
-		var attempt uint64
 		if err := retrySession(ctx, delay, func() error {
-			attempt++
-			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Bootstrap, attempt)
-			err := f.Scale(callCtx, initial)
-			end(err)
+			err := f.Scale(ctx, initial)
 			return err
 		}); err != nil {
 			return err
@@ -482,13 +478,9 @@ func (f *fleet) listen(ctx context.Context, delay time.Duration) error {
 	last := 0
 	for ctx.Err() == nil {
 		var msg *scaleset.RunnerScaleSetMessage
-		var pollAttempt uint64
 		if err := retrySession(ctx, delay, func() error {
-			pollAttempt++
-			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Poll, pollAttempt)
 			var err error
-			msg, err = f.session.GetMessage(callCtx, last, 3)
-			end(err)
+			msg, err = f.session.GetMessage(ctx, last, 3)
 			return err
 		}); err != nil {
 			return err
@@ -496,22 +488,14 @@ func (f *fleet) listen(ctx context.Context, delay time.Duration) error {
 		if msg == nil {
 			continue
 		}
-		var scaleAttempt uint64
 		if err := retrySession(ctx, delay, func() error {
-			scaleAttempt++
-			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Scale, scaleAttempt)
-			err := f.Scale(callCtx, msg)
-			end(err)
+			err := f.Scale(ctx, msg)
 			return err
 		}); err != nil {
 			return err
 		}
-		var ackAttempt uint64
-		if err := retrySession(ctx, delay, func() (diagnosticErr error) {
-			ackAttempt++
-			callCtx, end := f.diagnostics.Begin(ctx, scaleset.Ack, ackAttempt)
-			defer func() { end(diagnosticErr) }()
-			err := f.session.DeleteMessage(callCtx, msg.MessageID)
+		if err := retrySession(ctx, delay, func() error {
+			err := f.session.DeleteMessage(ctx, msg.MessageID)
 			if errors.Is(err, scaleset.NotFoundError) {
 				return nil
 			}

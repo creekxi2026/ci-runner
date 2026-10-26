@@ -5,12 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -21,13 +17,13 @@ import (
 
 // No Docker socket or GitHub endpoint is used. The real provisioning and
 // cleanup methods run against a stateful finite Docker transport.
-type diagnosticJIT struct {
+type resourceJIT struct {
 	fakeRunners
 	mode  string
 	calls *[]string
 }
 
-func (a *diagnosticJIT) GenerateJitRunnerConfig(ctx context.Context, s *scaleset.RunnerScaleSetJitRunnerSetting, set int) (*scaleset.RunnerScaleSetJitRunnerConfig, error) {
+func (a *resourceJIT) GenerateJitRunnerConfig(ctx context.Context, s *scaleset.RunnerScaleSetJitRunnerSetting, set int) (*scaleset.RunnerScaleSetJitRunnerConfig, error) {
 	*a.calls = append(*a.calls, "JIT "+s.Name)
 	if a.mode == "jit" {
 		return nil, errors.New("SECRET-jit-error")
@@ -35,28 +31,9 @@ func (a *diagnosticJIT) GenerateJitRunnerConfig(ctx context.Context, s *scaleset
 	return a.fakeRunners.GenerateJitRunnerConfig(ctx, s, set)
 }
 
-type diagnosticFaultWriter struct {
-	mode    string
-	release chan struct{}
-}
+var resourceJobName = regexp.MustCompile(`ci-job-[a-f0-9-]{12}`)
 
-func (w diagnosticFaultWriter) Write(b []byte) (int, error) {
-	switch w.mode {
-	case "panic":
-		panic("SECRET-writer")
-	case "blocked":
-		<-w.release
-		return len(b), nil
-	case "short":
-		return 0, nil
-	default:
-		return 0, errors.New("SECRET-EIO-ENOSPC")
-	}
-}
-
-var diagnosticJobName = regexp.MustCompile(`ci-job-[a-f0-9-]{12}`)
-
-func TestDiagnosticStartResourceTraceMatrix(t *testing.T) {
+func TestStartResourceTraceMatrix(t *testing.T) {
 	for _, mode := range []string{"success", "reserve", "capacity", "network", "proxy-create", "proxy-start", "proxy-connect", "proxy-address", "jit", "disk", "worker-create", "worker-start", "firewall", "release", "cleanup-failure", "cancel", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			type result struct {
@@ -65,24 +42,10 @@ func TestDiagnosticStartResourceTraceMatrix(t *testing.T) {
 				Canceled, Deadline, Capacity bool
 				Jobs, States                 int
 			}
-			run := func(writer string) (result, []byte) {
-				var output bytes.Buffer
-				var d *scaleset.Diagnostics
-				release := make(chan struct{})
-				if writer != "nil" {
-					var sink io.Writer = &output
-					if writer != "healthy" {
-						sink = diagnosticFaultWriter{writer, release}
-					}
-					var err error
-					d, err = scaleset.NewDiagnostics(scaleset.DiagnosticIdentity{WindowID: "start-matrix", SourceRevision: strings.Repeat("a", 40), ImageDigest: "sha256:" + strings.Repeat("b", 64), ScopeRef: "fixture"}, [32]byte{1}, sink, 1)
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
+			run := func() result {
 				var trace []string
-				api := &diagnosticJIT{mode: mode, calls: &trace}
-				f := &fleet{diagnostics: d, client: api, set: 42, owner: "fixture", image: "fixture-image", netout: "fixture-egress", jobs: map[string]string{}}
+				api := &resourceJIT{mode: mode, calls: &trace}
+				f := &fleet{client: api, set: 42, owner: "fixture", image: "fixture-image", netout: "fixture-egress", jobs: map[string]string{}}
 				if mode == "capacity" {
 					f.stopping = true
 				}
@@ -129,7 +92,7 @@ func TestDiagnosticStartResourceTraceMatrix(t *testing.T) {
 					}
 				})
 				underlying := engine.Transport
-				engine.Transport = diagnosticTraceTransport{underlying, &trace}
+				engine.Transport = resourceTraceTransport{underlying, &trace}
 				ctx := context.Background()
 				if mode == "cancel" {
 					var cancel context.CancelFunc
@@ -142,18 +105,20 @@ func TestDiagnosticStartResourceTraceMatrix(t *testing.T) {
 					defer cancel()
 				}
 				err := f.start(ctx)
-				close(release)
-				if d != nil {
-					closeDiagnostics(d)
-				}
 				text := ""
 				if err != nil {
-					text = diagnosticJobName.ReplaceAllString(err.Error(), "ci-job-FIXTURE")
+					text = resourceJobName.ReplaceAllString(err.Error(), "ci-job-FIXTURE")
 				}
 				for i := range trace {
-					trace[i] = diagnosticJobName.ReplaceAllString(trace[i], "ci-job-FIXTURE")
+					trace[i] = resourceJobName.ReplaceAllString(trace[i], "ci-job-FIXTURE")
 				}
 				r := result{trace, text, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(err, errCapacity), len(f.jobs), len(f.states)}
+				if mode == "cancel" && (!r.Canceled || r.Jobs != 0) {
+					t.Fatalf("cancel semantics changed: %+v", r)
+				}
+				if mode == "timeout" && !r.Deadline {
+					t.Fatalf("timeout semantics changed: %+v", r)
+				}
 				if mode == "success" {
 					if err != nil || r.Jobs != 1 || api.generated != 1 {
 						t.Fatalf("success fixture failed: %+v", r)
@@ -164,34 +129,19 @@ func TestDiagnosticStartResourceTraceMatrix(t *testing.T) {
 				if mode != "success" && mode != "release" && mode != "cleanup-failure" && r.Jobs != 0 {
 					t.Fatalf("unexpected retained resources: %+v", r)
 				}
-				return r, output.Bytes()
+				return r
 			}
-			baseline, _ := run("nil")
-			for _, writer := range []string{"healthy", "short", "io", "panic", "blocked"} {
-				got, events := run(writer)
-				if !reflect.DeepEqual(baseline, got) {
-					t.Fatalf("%s changed resource/error trace\n%+v\n%+v", writer, baseline, got)
-				}
-				if bytes.Contains(events, []byte("SECRET")) {
-					t.Fatal("secret reached diagnostics")
-				}
-				if out := os.Getenv("DIAGNOSTIC_TRACE_DIR"); out != "" {
-					b, _ := json.MarshalIndent(map[string]any{"baseline": baseline, "diagnostic": got, "writer": writer}, "", "  ")
-					if e := os.WriteFile(filepath.Join(out, fmt.Sprintf("start-%s-%s.json", mode, writer)), b, 0600); e != nil {
-						t.Fatal(e)
-					}
-				}
-			}
+			run()
 		})
 	}
 }
 
-type diagnosticTraceTransport struct {
+type resourceTraceTransport struct {
 	base  http.RoundTripper
 	trace *[]string
 }
 
-func (x diagnosticTraceTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+func (x resourceTraceTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	var b []byte
 	if r.Body != nil {
 		b, _ = io.ReadAll(r.Body)

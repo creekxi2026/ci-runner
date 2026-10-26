@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/actions/scaleset"
 	"io"
 	"net/http"
@@ -88,5 +89,25 @@ func TestLocalCleanupRechecksUnservedDemand(t *testing.T) {
 	<-done
 	if api.generated != 1 || len(f.snapshot()) != 1 {
 		t.Fatalf("cleanup lost assigned demand: JIT=%d jobs=%d", api.generated, len(f.snapshot()))
+	}
+}
+
+// Retained from the former diagnostics-equivalence test: a transient bootstrap
+// demand failure must be retried before the session proceeds.
+func TestBootstrapDemandFailureRetries(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := &fakeSession{cancel: cancel, msg: &scaleset.RunnerScaleSetMessage{MessageID: 8}}
+	calls := 0
+	fleet := &fleet{session: session, jobs: map[string]string{}, demandSource: func(context.Context) (int, error) {
+		calls++
+		if calls == 1 {
+			return 0, errors.New("fixture demand unavailable")
+		}
+		return 0, nil
+	}}
+	err := fleet.listen(ctx, time.Millisecond)
+	if calls < 2 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("bootstrap demand retry: calls=%d error=%v", calls, err)
 	}
 }

@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-
-set -eEuo pipefail
-
-go test ./... "$@"
-
